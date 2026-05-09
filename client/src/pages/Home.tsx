@@ -9,6 +9,7 @@ import StorySelection from "@/components/sections/StorySelection";
 import StoryAnalysis from "@/components/sections/StoryAnalysis";
 import ThemeSelection from "@/components/sections/ThemeSelection";
 import CharacterBible from "@/components/sections/CharacterBible";
+import DramaReel from "@/components/sections/DramaReel";
 import ClipPlayer from "@/components/sections/ClipPlayer";
 import CourtroomMode from "@/components/sections/CourtroomMode";
 import FinalVerdict from "@/components/sections/FinalVerdict";
@@ -23,6 +24,7 @@ export type AppStep =
   | "analysis"
   | "theme"
   | "characters"
+  | "drama-reel"
   | "clip"
   | "courtroom"
   | "verdict";
@@ -34,6 +36,7 @@ const STEPS: { id: AppStep; label: string }[] = [
   { id: "analysis", label: "Analysis" },
   { id: "theme", label: "Theme" },
   { id: "characters", label: "Cast" },
+  { id: "drama-reel", label: "Drama" },
   { id: "clip", label: "Clip" },
   { id: "courtroom", label: "Court" },
   { id: "verdict", label: "Verdict" },
@@ -76,7 +79,6 @@ export default function Home() {
       {currentStep !== "hero" && (
         <div className="sticky top-0 z-50" style={{ background: "rgba(10,14,26,0.95)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(255,215,0,0.15)" }}>
           <StepProgress steps={STEPS} currentStep={currentStep} onStepClick={(s) => {
-            // Only allow going back
             const clickIdx = STEPS.findIndex(st => st.id === s);
             if (clickIdx <= currentStepIndex) goTo(s);
           }} />
@@ -116,6 +118,14 @@ export default function Home() {
         {currentStep === "characters" && selectedStory && (
           <CharacterBible
             storyId={selectedStory.id}
+            onContinue={() => goTo("drama-reel")}
+          />
+        )}
+
+        {currentStep === "drama-reel" && selectedStory && (
+          <DramaReel
+            story={selectedStory}
+            theme={selectedTheme || "anime-courtroom"}
             onContinue={() => goTo("clip")}
           />
         )}
