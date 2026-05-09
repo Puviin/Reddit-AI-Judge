@@ -1,13 +1,16 @@
 // DRAMAFORGE SCOUT — Drama Router
-// Handles fal.ai video generation + ElevenLabs TTS
+// Handles fal.ai video generation + ElevenLabs TTS + DB reel caching
 // Confirmed working endpoints:
 //   Video: fal-ai/fast-animatediff/text-to-video  ✓ (num_frames max=32)
 //   Image: fal-ai/flux/schnell                     ✓ (fallback)
 //   Audio: ElevenLabs TTS                          ✓
 
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import { publicProcedure, router } from "../_core/trpc";
 import { storagePut } from "../storage";
+import { getDb } from "../db";
+import { reelCache } from "../../drizzle/schema";
 
 // ─── In-memory job store for progress tracking ───────────────────────────────
 type SceneStatus = "queued" | "generating" | "done" | "error";
@@ -17,6 +20,8 @@ type JobScene = {
   status: SceneStatus;
   videoUrl: string | null;
   audioUrl: string | null;
+  narration?: string;
+  speakerRole?: string;
   error?: string;
 };
 type Job = {
@@ -133,13 +138,11 @@ async function runReelJob(
     jobScene.status = "generating";
 
     try {
-      // Generate video and audio in parallel per scene
       const [videoResult, audioResult] = await Promise.allSettled([
         falKey ? (async () => {
           try {
             return await generateMangaVideoScene(scene.prompt, falKey);
           } catch {
-            // Fallback to image
             return await generateMangaImageScene(scene.prompt, falKey);
           }
         })() : Promise.resolve(null),
@@ -156,7 +159,6 @@ async function runReelJob(
         })() : Promise.resolve(null),
       ]);
 
-      // Store video/image in S3
       let videoUrl: string | null = null;
       if (videoResult.status === "fulfilled" && videoResult.value) {
         try {
@@ -173,7 +175,7 @@ async function runReelJob(
           );
           videoUrl = url;
         } catch {
-          videoUrl = videoResult.value; // direct URL fallback
+          videoUrl = videoResult.value;
         }
       }
 
@@ -194,11 +196,66 @@ async function runReelJob(
   job.status = "done";
   console.log(`[Job ${jobId}] Complete for story: ${storyTitle}`);
 
+  // Persist completed reel to DB cache
+  try {
+    const db = await getDb();
+    if (db) {
+      const completedScenes = scenes.map((s, i) => ({
+        id: s.id,
+        title: s.title,
+        narration: s.narration,
+        speakerRole: s.speakerRole,
+        videoUrl: job.scenes[i].videoUrl,
+        audioUrl: job.scenes[i].audioUrl,
+      }));
+
+      await db.insert(reelCache).values({
+        storyId,
+        storyTitle,
+        scenes: completedScenes,
+        sceneCount: completedScenes.length,
+      }).onDuplicateKeyUpdate({
+        set: {
+          scenes: completedScenes,
+          sceneCount: completedScenes.length,
+        },
+      });
+      console.log(`[Job ${jobId}] Reel cached to DB for storyId: ${storyId}`);
+    }
+  } catch (err) {
+    console.error(`[Job ${jobId}] Failed to cache reel to DB:`, err);
+  }
+
   // Clean up job after 10 minutes
   setTimeout(() => jobs.delete(jobId), 10 * 60 * 1000);
 }
 
 export const dramaRouter = router({
+  // Check if a reel is already cached for this story
+  getReelCache: publicProcedure
+    .input(z.object({ storyId: z.string() }))
+    .query(async ({ input }) => {
+      try {
+        const db = await getDb();
+        if (!db) return null;
+        const rows = await db.select().from(reelCache).where(eq(reelCache.storyId, input.storyId)).limit(1);
+        if (!rows.length) return null;
+        const row = rows[0];
+        return {
+          storyId: row.storyId,
+          storyTitle: row.storyTitle,
+          sceneCount: row.sceneCount,
+          scenes: row.scenes as Array<{
+            id: string; title: string; narration: string; speakerRole: string;
+            videoUrl: string | null; audioUrl: string | null;
+          }>,
+          createdAt: row.createdAt,
+        };
+      } catch {
+        return null;
+      }
+    }),
+
   // Start a background reel generation job — returns jobId immediately
   startReelJob: publicProcedure
     .input(z.object({
@@ -228,6 +285,8 @@ export const dramaRouter = router({
         scenes: input.scenes.map(s => ({
           id: s.id,
           title: s.title,
+          narration: s.narration,
+          speakerRole: s.speakerRole,
           status: "queued" as SceneStatus,
           videoUrl: null,
           audioUrl: null,
@@ -236,7 +295,6 @@ export const dramaRouter = router({
 
       jobs.set(jobId, job);
 
-      // Fire and forget — runs in background
       runReelJob(jobId, input.storyId, input.storyTitle, input.scenes, falKey, elevenKey).catch(
         err => console.error(`[Job ${jobId}] Unexpected error:`, err)
       );

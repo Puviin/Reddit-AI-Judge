@@ -118,12 +118,43 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
   const [loadProgress, setLoadProgress] = useState(0);
   const [genPercent, setGenPercent] = useState(0);
   const [elapsedSec, setElapsedSec] = useState(0);
+  const [cacheLoaded, setCacheLoaded] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startTimeRef = useRef<number>(0);
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Check DB cache for previously generated reel
+  const reelCache = trpc.drama.getReelCache.useQuery(
+    { storyId: story.id },
+    { enabled: !cacheLoaded }
+  );
+
+  useEffect(() => {
+    if (!reelCache.data || cacheLoaded) return;
+    const cached = reelCache.data;
+    if (cached.scenes && cached.scenes.length > 0) {
+      // Load cached media into state and jump straight to loading phase
+      const mediaMap: Record<string, SceneMedia> = {};
+      cached.scenes.forEach(s => {
+        mediaMap[s.id] = {
+          videoUrl: s.videoUrl,
+          audioUrl: s.audioUrl,
+          videoReady: !s.videoUrl,
+          audioReady: !s.audioUrl,
+        };
+      });
+      setSceneMedia(mediaMap);
+      setSceneGenStatus(Object.fromEntries(cached.scenes.map(s => [s.id, "done" as GenStatus])));
+      setGenPercent(100);
+      setAppState("loading");
+      setCacheLoaded(true);
+    } else {
+      setCacheLoaded(true);
+    }
+  }, [reelCache.data, cacheLoaded]);
 
   // Start job mutation
   const startJob = trpc.drama.startReelJob.useMutation({
@@ -505,13 +536,25 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
           <div className="flex items-center gap-4 mb-4 flex-wrap">
 
             {appState === "idle" && (
-              <button
-                onClick={handleGenerate}
-                className="px-6 py-2.5 font-bold uppercase tracking-wider transition-all hover:scale-105"
-                style={{ fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: "0.9rem", letterSpacing: "0.15em", background: "#FF6B35", color: "white", clipPath: "polygon(8px 0%, 100% 0%, calc(100% - 8px) 100%, 0% 100%)", boxShadow: "0 0 20px rgba(255,107,53,0.4)" }}
-              >
-                🎬 GENERATE AI VIDEO + VOICE
-              </button>
+              <>
+                <button
+                  onClick={handleGenerate}
+                  className="px-6 py-2.5 font-bold uppercase tracking-wider transition-all hover:scale-105"
+                  style={{ fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: "0.9rem", letterSpacing: "0.15em", background: "#FF6B35", color: "white", clipPath: "polygon(8px 0%, 100% 0%, calc(100% - 8px) 100%, 0% 100%)", boxShadow: "0 0 20px rgba(255,107,53,0.4)" }}
+                >
+                  🎬 GENERATE AI VIDEO + VOICE
+                </button>
+                {reelCache.isLoading && (
+                  <span className="text-xs animate-pulse" style={{ color: "rgba(255,215,0,0.5)", fontFamily: "Noto Sans, sans-serif" }}>checking cache...</span>
+                )}
+              </>
+            )}
+
+            {/* Cache loaded badge */}
+            {cacheLoaded && reelCache.data?.scenes?.length && appState !== "idle" && appState !== "generating" && (
+              <span className="text-xs px-2 py-1 rounded" style={{ background: "rgba(46,204,113,0.15)", color: "#2ECC71", border: "1px solid rgba(46,204,113,0.3)", fontFamily: "'Bebas Neue', Impact, sans-serif", letterSpacing: "0.08em" }}>
+                ⚡ CACHED — LOAD INSTANTLY
+              </span>
             )}
 
             {appState === "generating" && (

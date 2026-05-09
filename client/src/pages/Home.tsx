@@ -29,6 +29,17 @@ export type AppStep =
   | "courtroom"
   | "verdict";
 
+interface AiAnalysis {
+  dramaScore: number;
+  safetyRating: string;
+  sentiment: { plaintiff: number; defendant: number; publicOpinion: number };
+  keyEvidence: string[];
+  dramaticSummary: string;
+  verdictHint: string;
+  tags: string[];
+  funnyCommentHighlight: string;
+}
+
 const STEPS: { id: AppStep; label: string }[] = [
   { id: "hero", label: "Scout" },
   { id: "adaption", label: "Pipeline" },
@@ -46,6 +57,7 @@ export default function Home() {
   const [currentStep, setCurrentStep] = useState<AppStep>("hero");
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [selectedTheme, setSelectedTheme] = useState<string | null>(null);
+  const [aiAnalysis, setAiAnalysis] = useState<AiAnalysis | null>(null);
 
   const goTo = (step: AppStep) => {
     setCurrentStep(step);
@@ -56,7 +68,13 @@ export default function Home() {
 
   const handleStorySelect = (story: Story) => {
     setSelectedStory(story);
+    setAiAnalysis(null); // reset AI analysis for new story
     goTo("analysis");
+  };
+
+  const handleAnalysisContinue = (analysis?: AiAnalysis) => {
+    if (analysis) setAiAnalysis(analysis);
+    goTo("theme");
   };
 
   const handleThemeSelect = (themeId: string) => {
@@ -67,6 +85,7 @@ export default function Home() {
   const handleReset = () => {
     setSelectedStory(null);
     setSelectedTheme(null);
+    setAiAnalysis(null);
     setCurrentStep("hero");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -104,7 +123,7 @@ export default function Home() {
         {currentStep === "analysis" && selectedStory && (
           <StoryAnalysis
             story={selectedStory}
-            onContinue={() => goTo("theme")}
+            onContinue={handleAnalysisContinue}
           />
         )}
 
@@ -141,6 +160,7 @@ export default function Home() {
           <CourtroomMode
             storyId={selectedStory.id}
             onContinue={() => goTo("verdict")}
+            aiAnalysis={aiAnalysis}
           />
         )}
 
@@ -149,6 +169,7 @@ export default function Home() {
             storyId={selectedStory.id}
             onReplay={() => goTo("clip")}
             onReset={handleReset}
+            aiAnalysis={aiAnalysis}
           />
         )}
       </div>

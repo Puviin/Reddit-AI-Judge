@@ -1,17 +1,10 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, json } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
- * Extend this file with additional tables as your product grows.
- * Columns use camelCase to match both database fields and generated types.
  */
 export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
   id: int("id").autoincrement().primaryKey(),
-  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
@@ -25,4 +18,37 @@ export const users = mysqlTable("users", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
-// TODO: Add your tables here
+/**
+ * Cache for generated drama reel scenes (fal.ai video + ElevenLabs audio).
+ * Keyed by storyId so re-visiting a story skips regeneration.
+ */
+export const reelCache = mysqlTable("reel_cache", {
+  id: int("id").autoincrement().primaryKey(),
+  storyId: varchar("storyId", { length: 128 }).notNull().unique(),
+  storyTitle: text("storyTitle").notNull(),
+  scenes: json("scenes").notNull(), // Array of { id, title, mediaUrl, audioUrl, narration, speakerRole }
+  sceneCount: int("sceneCount").notNull().default(0),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ReelCache = typeof reelCache.$inferSelect;
+export type InsertReelCache = typeof reelCache.$inferInsert;
+
+/**
+ * Cache for Gemini AI story analysis results.
+ * Keyed by storyId to avoid re-calling Gemini for the same story.
+ */
+export const storyAnalysisCache = mysqlTable("story_analysis_cache", {
+  id: int("id").autoincrement().primaryKey(),
+  storyId: varchar("storyId", { length: 128 }).notNull().unique(),
+  analysis: json("analysis").notNull(), // Full Gemini analysis JSON
+  characterBible: json("characterBible"), // Gemini character bible JSON
+  courtroomDialogue: json("courtroomDialogue"), // Gemini courtroom dialogue JSON
+  verdict: json("verdict"), // Gemini verdict JSON
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type StoryAnalysisCache = typeof storyAnalysisCache.$inferSelect;
+export type InsertStoryAnalysisCache = typeof storyAnalysisCache.$inferInsert;
