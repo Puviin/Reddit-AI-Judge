@@ -139,7 +139,7 @@ export default function HeroSection({ onStart, onScoutedStory }: HeroSectionProp
                 🔍 SCOUT A REDDIT POST
               </span>
               <span className="text-xs" style={{ color: "rgba(255,255,255,0.3)", fontFamily: "Noto Sans, sans-serif" }}>
-                — powered by Exa AI
+                — powered by Exa AI + Reddit API
               </span>
             </div>
 
@@ -192,7 +192,7 @@ export default function HeroSection({ onStart, onScoutedStory }: HeroSectionProp
                   <div className="h-full rounded-full animate-pulse" style={{ background: "#FFD700", width: "60%" }} />
                 </div>
                 <p className="text-xs mt-1" style={{ color: "rgba(255,215,0,0.6)", fontFamily: "Noto Sans, sans-serif" }}>
-                  Fetching post and comments via Exa AI...
+                  Fetching real post content + comments from Reddit...
                 </p>
               </div>
             )}
@@ -204,10 +204,20 @@ export default function HeroSection({ onStart, onScoutedStory }: HeroSectionProp
               </div>
             )}
             {scoutMutation.isSuccess && (
-              <div className="px-4 pb-3">
+              <div className="px-4 pb-3 flex items-center gap-3">
                 <p className="text-xs" style={{ color: "#4CAF50", fontFamily: "Noto Sans, sans-serif" }}>
                   ✓ Case scouted! Launching into the courtroom...
                 </p>
+                {(scoutMutation.data as { story?: { fetchedReal?: boolean } })?.story?.fetchedReal && (
+                  <span className="px-2 py-0.5 text-[10px] uppercase tracking-wider rounded" style={{ background: "rgba(76,175,80,0.15)", border: "1px solid rgba(76,175,80,0.4)", color: "#4CAF50", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>
+                    ✓ REAL REDDIT DATA
+                  </span>
+                )}
+                {!(scoutMutation.data as { story?: { fetchedReal?: boolean } })?.story?.fetchedReal && (
+                  <span className="px-2 py-0.5 text-[10px] uppercase tracking-wider rounded" style={{ background: "rgba(255,215,0,0.1)", border: "1px solid rgba(255,215,0,0.3)", color: "#FFD700", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>
+                    ⚡ AI GENERATED
+                  </span>
+                )}
               </div>
             )}
           </div>

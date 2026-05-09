@@ -1,5 +1,7 @@
 // DRAMAFORGE SCOUT — Scout Router
-// Uses Exa to fetch Reddit post content, then OpenAI GPT-4o to parse/generate the drama case
+// Strategy 1: Reddit JSON API (reddit.com/post.json) — always works, gets real content + comments
+// Strategy 2: Exa search — fallback if Reddit API fails
+// Strategy 3: OpenAI generation from URL title — last resort
 
 import { publicProcedure, router } from "../_core/trpc";
 import { z } from "zod";
@@ -24,7 +26,8 @@ async function callOpenAI(prompt: string): Promise<string> {
       messages: [
         {
           role: "system",
-          content: "You are DramaForge Scout, an AI that turns Reddit drama into structured courtroom cases. Always respond with valid JSON only.",
+          content:
+            "You are DramaForge Scout, an AI that turns Reddit drama into structured courtroom cases. Always respond with valid JSON only.",
         },
         { role: "user", content: prompt },
       ],
@@ -39,10 +42,86 @@ async function callOpenAI(prompt: string): Promise<string> {
     throw new Error(`OpenAI error ${response.status}: ${err.slice(0, 200)}`);
   }
 
-  const data = await response.json() as {
+  const data = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
   };
   return data?.choices?.[0]?.message?.content ?? "";
+}
+
+// ─── Strategy 1: Reddit JSON API ─────────────────────────────────────────────
+async function fetchRedditJsonApi(url: string): Promise<{
+  title: string;
+  selftext: string;
+  comments: string[];
+  subreddit: string;
+  author: string;
+  score: number;
+} | null> {
+  try {
+    // Convert any reddit URL to the .json endpoint
+    const cleanUrl = url.replace(/\/$/, "");
+    const jsonUrl = `${cleanUrl}.json?limit=25&raw_json=1`;
+
+    const response = await fetch(jsonUrl, {
+      headers: {
+        "User-Agent": "DramaForge/1.0 (hackathon project)",
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!response.ok) {
+      console.warn(`[Scout] Reddit JSON API returned ${response.status}`);
+      return null;
+    }
+
+    const data = (await response.json()) as Array<{
+      data: {
+        children: Array<{
+          data: {
+            title?: string;
+            selftext?: string;
+            subreddit?: string;
+            author?: string;
+            score?: number;
+          };
+        }>;
+      };
+    }>;
+
+    if (!Array.isArray(data) || data.length < 2) return null;
+
+    const post = data[0]?.data?.children?.[0]?.data;
+    if (!post?.title) return null;
+
+    // Extract top comments
+    const commentChildren = data[1]?.data?.children ?? [];
+    const comments: string[] = [];
+    for (const child of commentChildren) {
+      const body = (child as { data?: { body?: string; kind?: string } }).data?.body;
+      const kind = (child as { kind?: string }).kind;
+      if (kind === "t1" && body && body !== "[deleted]" && body !== "[removed]" && body.length > 10) {
+        comments.push(body.slice(0, 300));
+        if (comments.length >= 15) break;
+      }
+    }
+
+    console.log(
+      `[Scout] Reddit JSON API success: "${post.title?.slice(0, 60)}" — ${comments.length} comments fetched`
+    );
+
+    return {
+      title: post.title ?? "",
+      selftext: post.selftext ?? "",
+      comments,
+      subreddit: post.subreddit ?? "",
+      author: post.author ?? "OP",
+      score: post.score ?? 0,
+    };
+  } catch (err) {
+    console.warn("[Scout] Reddit JSON API failed:", err);
+    return null;
+  }
 }
 
 export const scoutRouter = router({
@@ -60,52 +139,43 @@ export const scoutRouter = router({
       let postTitle = urlSlug || "Reddit Post";
       let postContent = "";
       let comments: string[] = [];
+      let fetchedReal = false;
 
-      // Strategy 1: Exa search for indexed version of the post
-      try {
-        const exa = getExa();
-        const searchQuery = `site:reddit.com ${urlSlug} ${subreddit}`;
-        const searchResult = await exa.searchAndContents(searchQuery, {
-          numResults: 3,
-          text: { maxCharacters: 6000 },
-          includeDomains: ["reddit.com", "old.reddit.com"],
-        });
-
-        const postIdMatch = url.match(/comments\/([^/]+)/);
-        const postId = postIdMatch ? postIdMatch[1] : "";
-
-        const best = searchResult.results.find(r => r.url?.includes(postId)) || searchResult.results[0];
-
-        if (best?.text && best.text.length > 100 && !best.text.includes("blocked by network security")) {
-          postTitle = best.title || postTitle;
-          const rawText = best.text;
-          const lines = rawText.split("\n").filter(l => l.trim().length > 20);
-          const bodyLines: string[] = [];
-          const commentLines: string[] = [];
-          let inComments = false;
-
-          for (const line of lines) {
-            if (bodyLines.length > 8) inComments = true;
-            if (inComments) commentLines.push(line.trim());
-            else bodyLines.push(line.trim());
-          }
-
-          postContent = bodyLines.join(" ").slice(0, 3000);
-          comments = commentLines.slice(0, 15).filter(c => c.length > 20 && !c.includes("http"));
-        }
-      } catch (err) {
-        console.warn("[Scout] Exa search failed:", err);
+      // ── Strategy 1: Reddit JSON API (best — gets real post + comments) ──────
+      const redditData = await fetchRedditJsonApi(url);
+      if (redditData && (redditData.selftext.length > 20 || redditData.comments.length > 0)) {
+        postTitle = redditData.title;
+        postContent = redditData.selftext;
+        comments = redditData.comments;
+        fetchedReal = true;
+        console.log(
+          `[Scout] Using Reddit JSON API data: ${postContent.length} chars body, ${comments.length} comments`
+        );
       }
 
-      // Strategy 2: Direct Exa getContents
-      if (!postContent) {
+      // ── Strategy 2: Exa search (fallback) ────────────────────────────────────
+      if (!fetchedReal) {
         try {
           const exa = getExa();
-          const result = await exa.getContents([url], { text: { maxCharacters: 6000 } });
-          const page = result.results[0];
-          if (page?.text && page.text.length > 100 && !page.text.includes("blocked by network security")) {
-            postTitle = page.title || postTitle;
-            const lines = page.text.split("\n").filter(l => l.trim().length > 20);
+          const postIdMatch = url.match(/comments\/([^/]+)/);
+          const postId = postIdMatch ? postIdMatch[1] : "";
+          const searchQuery = `site:reddit.com ${urlSlug} ${subreddit}`;
+          const searchResult = await exa.searchAndContents(searchQuery, {
+            numResults: 3,
+            text: { maxCharacters: 6000 },
+            includeDomains: ["reddit.com", "old.reddit.com"],
+          });
+
+          const best =
+            searchResult.results.find((r) => r.url?.includes(postId)) || searchResult.results[0];
+
+          if (
+            best?.text &&
+            best.text.length > 100 &&
+            !best.text.includes("blocked by network security")
+          ) {
+            postTitle = best.title || postTitle;
+            const lines = best.text.split("\n").filter((l) => l.trim().length > 20);
             const bodyLines: string[] = [];
             const commentLines: string[] = [];
             let inComments = false;
@@ -115,18 +185,25 @@ export const scoutRouter = router({
               else bodyLines.push(line.trim());
             }
             postContent = bodyLines.join(" ").slice(0, 3000);
-            comments = commentLines.slice(0, 15).filter(c => c.length > 20 && !c.includes("http"));
+            comments = commentLines.slice(0, 15).filter((c) => c.length > 20 && !c.includes("http"));
+            fetchedReal = true;
+            console.log(`[Scout] Using Exa data: ${postContent.length} chars`);
           }
         } catch (err) {
-          console.warn("[Scout] Exa getContents failed:", err);
+          console.warn("[Scout] Exa search failed:", err);
         }
       }
 
       // Detect if content is just a block page
-      const isBlocked = postContent.includes("blocked by network security") || postContent.includes("file a ticket");
-      if (isBlocked) postContent = "";
+      if (
+        postContent.includes("blocked by network security") ||
+        postContent.includes("file a ticket")
+      ) {
+        postContent = "";
+        fetchedReal = false;
+      }
 
-      // Build the OpenAI prompt — either parse real content or generate from title
+      // ── Strategy 3: OpenAI generation from title (last resort) ──────────────
       const hasContent = postContent.length > 50;
       const parsePrompt = hasContent
         ? `Parse this Reddit post into a DramaForge drama case.
@@ -134,20 +211,21 @@ export const scoutRouter = router({
 SUBREDDIT: r/${subreddit}
 POST TITLE: ${postTitle}
 POST CONTENT: ${postContent.slice(0, 2500)}
-TOP COMMENTS: ${comments.slice(0, 8).join(" | ")}
+TOP COMMENTS (${comments.length} real comments from Reddit):
+${comments.slice(0, 10).map((c, i) => `${i + 1}. "${c}"`).join("\n")}
 
-Return JSON:
+Return JSON with these exact fields:
 {
   "plaintiff": "<who feels wronged — short name/role, max 50 chars>",
   "defendant": "<who is being accused — short name/role, max 50 chars>",
-  "summary": "<2-3 sentence dramatic summary>",
-  "conflict": "<2-3 paragraph detailed version of the story>",
-  "keyEvidence": ["<4 specific key facts, each max 100 chars>"],
-  "topFunnySafeComments": ["<5 funny/insightful comments — use real ones if available, otherwise invent fitting ones>"],
-  "dramaScore": <60-99>,
-  "tags": ["<2-3 drama tags>"]
+  "summary": "<2-3 sentence dramatic summary of the conflict>",
+  "conflict": "<2-3 paragraph detailed version of the story with specific details>",
+  "keyEvidence": ["<4 specific key facts from the post, each max 100 chars>"],
+  "topFunnySafeComments": ["<5 of the funniest/most insightful real comments — use the actual comments above, pick the best ones>"],
+  "dramaScore": <60-99 based on how dramatic this is>,
+  "tags": ["<2-3 drama tags like 'Neighbor Drama', 'Property Rights', etc.>"]
 }`
-        : `A user submitted this Reddit URL. The post content could not be fetched (Reddit blocked the crawler).
+        : `A user submitted this Reddit URL. The post content could not be fetched.
 Based ONLY on the URL title and subreddit, invent a realistic, funny, and dramatic Reddit story.
 
 SUBREDDIT: r/${subreddit}
@@ -167,7 +245,7 @@ Return JSON:
   "tags": ["<2-3 drama tags>"]
 }`;
 
-      // Call OpenAI
+      // Call OpenAI to parse/structure the content
       let plaintiff = "The Complainant";
       let defendant = "The Accused";
       let summary = postContent.slice(0, 400) || urlSlug;
@@ -175,6 +253,7 @@ Return JSON:
       let keyEvidence: string[] = [];
       let topFunnySafeComments: string[] = [];
       let dramaScore = 75;
+      let tags: string[] = [subreddit.replace(/_/g, " ")];
 
       try {
         const raw = await callOpenAI(parsePrompt);
@@ -187,14 +266,13 @@ Return JSON:
         keyEvidence = parsed.keyEvidence || [];
         topFunnySafeComments = parsed.topFunnySafeComments || [];
         dramaScore = parsed.dramaScore || dramaScore;
+        tags = parsed.tags || tags;
 
-        // Use generated conflict as postContent if we had none
         if (!postContent && parsed.conflict) {
           postContent = parsed.conflict;
         }
       } catch (err) {
         console.error("[Scout] OpenAI parse failed:", err);
-        // Fallback to basic extraction
       }
 
       // Fallbacks
@@ -207,15 +285,16 @@ Return JSON:
       }
 
       if (!topFunnySafeComments.length) {
-        topFunnySafeComments = comments.length > 0
-          ? comments.slice(0, 5)
-          : [
-              "This is absolutely unhinged and I love it.",
-              "The audacity is astronomical.",
-              "NTA — the court of Reddit has spoken.",
-              "I cannot believe this is a real situation.",
-              "Certified drama moment.",
-            ];
+        topFunnySafeComments =
+          comments.length > 0
+            ? comments.slice(0, 5)
+            : [
+                "This is absolutely unhinged and I love it.",
+                "The audacity is astronomical.",
+                "NTA — the court of Reddit has spoken.",
+                "I cannot believe this is a real situation.",
+                "Certified drama moment.",
+              ];
       }
 
       const humorScore = Math.min(95, 55 + Math.floor(Math.random() * 30));
@@ -237,8 +316,9 @@ Return JSON:
       };
       const community = categoryMap[subreddit] || subreddit.replace(/_/g, " ");
 
-      const cleanTitle = postTitle.replace(/^(AITA|TIFU|ULPT|WIBTA|UPDATE)[:\s]*/i, "").trim()
-        || urlSlug.replace(/_/g, " ");
+      const cleanTitle = postTitle
+        .replace(/^(AITA|TIFU|ULPT|WIBTA|UPDATE)[:\s]*/i, "")
+        .trim() || urlSlug.replace(/_/g, " ");
 
       const rawComments = topFunnySafeComments.map((text, i) => ({
         id: `scouted-comment-${i}`,
@@ -260,7 +340,9 @@ Return JSON:
         humorScore,
         conflictClarity,
         commentQuality,
-        recommendationBadge: (dramaScore > 85 ? "HOT CASE" : dramaScore > 75 ? "SPICY PICK" : "SOLID DRAMA") as "HOT CASE" | "SPICY PICK" | "SOLID DRAMA" | "CROWD PLEASER",
+        recommendationBadge: (
+          dramaScore > 85 ? "HOT CASE" : dramaScore > 75 ? "SPICY PICK" : "SOLID DRAMA"
+        ) as "HOT CASE" | "SPICY PICK" | "SOLID DRAMA" | "CROWD PLEASER",
         plaintiff,
         defendant,
         conflict,
@@ -289,9 +371,10 @@ Return JSON:
         },
         content: postContent || conflict,
         dramaScore,
-        tags: [community],
+        tags,
         isScouted: true,
         sourceUrl: url,
+        fetchedReal, // flag so UI can show "REAL REDDIT DATA" vs "AI GENERATED"
       };
 
       return { story };
