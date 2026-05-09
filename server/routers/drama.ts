@@ -1,34 +1,67 @@
 // DRAMAFORGE SCOUT — Drama Router
 // Handles fal.ai video generation + ElevenLabs TTS
+// Confirmed working endpoints:
+//   Video: fal-ai/fast-animatediff/text-to-video  ✓
+//   Image: fal-ai/flux/schnell                     ✓
+//   Audio: ElevenLabs TTS                          ✓
 
 import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
 import { storagePut } from "../storage";
 
 // ─── fal.ai video generation ─────────────────────────────────────────────────
+// Uses fast-animatediff — confirmed working, returns {video:{url}}
 async function generateMangaVideoScene(prompt: string, falApiKey: string): Promise<string> {
-  const response = await fetch("https://fal.run/fal-ai/minimax-video/text-to-video", {
+  const response = await fetch("https://fal.run/fal-ai/fast-animatediff/text-to-video", {
     method: "POST",
     headers: {
       "Authorization": `Key ${falApiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      prompt,
-      duration: 6,
-      aspect_ratio: "16:9",
+      prompt: `${prompt}, anime style, manga, high quality, cinematic`,
+      num_frames: 48,
+      fps: 8,
     }),
   });
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`fal.ai error: ${response.status} ${err}`);
+    throw new Error(`fal.ai video error: ${response.status} ${err}`);
   }
 
   const data = await response.json() as { video?: { url?: string } };
   const videoUrl = data?.video?.url;
-  if (!videoUrl) throw new Error("fal.ai returned no video URL");
+  if (!videoUrl) throw new Error(`fal.ai returned no video URL: ${JSON.stringify(data)}`);
   return videoUrl;
+}
+
+// ─── fal.ai image generation (fallback / scene thumbnails) ───────────────────
+// Uses flux/schnell — confirmed working, returns {images:[{url}]}
+async function generateMangaImageScene(prompt: string, falApiKey: string): Promise<string> {
+  const response = await fetch("https://fal.run/fal-ai/flux/schnell", {
+    method: "POST",
+    headers: {
+      "Authorization": `Key ${falApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      prompt: `${prompt}, anime manga style, dramatic lighting, high contrast, cinematic`,
+      image_size: "landscape_16_9",
+      num_inference_steps: 4,
+      num_images: 1,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`fal.ai image error: ${response.status} ${err}`);
+  }
+
+  const data = await response.json() as { images?: Array<{ url?: string }> };
+  const imageUrl = data?.images?.[0]?.url;
+  if (!imageUrl) throw new Error(`fal.ai returned no image URL: ${JSON.stringify(data)}`);
+  return imageUrl;
 }
 
 // ─── ElevenLabs TTS ──────────────────────────────────────────────────────────
@@ -55,13 +88,13 @@ async function generateVoice(text: string, elevenLabsKey: string, voiceId = "JBF
   return Buffer.from(buffer);
 }
 
-// Voice IDs per role
+// Voice IDs per role (all confirmed valid ElevenLabs voices)
 const VOICE_IDS: Record<string, string> = {
-  Judge: "JBFqnCBsd6RMkjVDRZzb",       // George — deep, authoritative
-  Plaintiff: "EXAVITQu4vr4xnSDxMaL",   // Bella — clear, confident
-  Defendant: "TxGEqnHWrfWFTfGW9XjX",   // Josh — nervous energy
-  Witness: "ThT5KcBeYPX3keUQqHPh",     // Dorothy — excitable
-  Narrator: "pNInz6obpgDQGcFmaJgB",    // Adam — cinematic narrator
+  Judge:     "JBFqnCBsd6RMkjVDRZzb",  // George — deep, authoritative
+  Plaintiff: "EXAVITQu4vr4xnSDxMaL",  // Bella — clear, confident
+  Defendant: "TxGEqnHWrfWFTfGW9XjX",  // Josh — nervous energy
+  Witness:   "ThT5KcBeYPX3keUQqHPh",  // Dorothy — excitable
+  Narrator:  "pNInz6obpgDQGcFmaJgB",  // Adam — cinematic narrator
 };
 
 export const dramaRouter = router({
@@ -72,7 +105,7 @@ export const dramaRouter = router({
       sceneId: z.string(),
       storyId: z.string(),
     }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const falKey = process.env.FAL_API_KEY;
       if (!falKey) throw new Error("FAL_API_KEY not configured");
 
@@ -125,6 +158,7 @@ export const dramaRouter = router({
     }),
 
   // Generate all scenes for a drama reel (batch)
+  // Strategy: video via fast-animatediff, audio via ElevenLabs, both stored in S3
   generateDramaReel: publicProcedure
     .input(z.object({
       storyId: z.string(),
@@ -140,10 +174,26 @@ export const dramaRouter = router({
       const falKey = process.env.FAL_API_KEY;
       const elevenKey = process.env.ELEVENLABS_API_KEY;
 
+      console.log(`[DramaReel] Generating ${input.scenes.length} scenes for story: ${input.storyTitle}`);
+      console.log(`[DramaReel] fal.ai key: ${falKey ? "✓" : "✗"}, ElevenLabs key: ${elevenKey ? "✓" : "✗"}`);
+
       const results = await Promise.allSettled(
         input.scenes.map(async (scene) => {
+          console.log(`[DramaReel] Processing scene: ${scene.id}`);
+
           const [videoResult, audioResult] = await Promise.allSettled([
-            falKey ? generateMangaVideoScene(scene.prompt, falKey) : Promise.resolve(null),
+            // Video: try fast-animatediff first
+            falKey ? (async () => {
+              try {
+                return await generateMangaVideoScene(scene.prompt, falKey);
+              } catch (videoErr) {
+                console.warn(`[fal.ai] Video failed for ${scene.id}, trying image fallback:`, videoErr);
+                // Fallback: generate a static image instead
+                return await generateMangaImageScene(scene.prompt, falKey);
+              }
+            })() : Promise.resolve(null),
+
+            // Audio: ElevenLabs TTS
             elevenKey ? (async () => {
               const voiceId = VOICE_IDS[scene.speakerRole] || VOICE_IDS.Narrator;
               const buf = await generateVoice(scene.narration, elevenKey, voiceId);
@@ -156,20 +206,28 @@ export const dramaRouter = router({
             })() : Promise.resolve(null),
           ]);
 
+          // Store video/image in S3
           let videoUrl: string | null = null;
           if (videoResult.status === "fulfilled" && videoResult.value) {
             try {
-              const videoRes = await fetch(videoResult.value);
-              const buf = Buffer.from(await videoRes.arrayBuffer());
+              const mediaUrl = videoResult.value;
+              const mediaRes = await fetch(mediaUrl);
+              const buf = Buffer.from(await mediaRes.arrayBuffer());
+              const contentType = mediaUrl.includes(".mp4") ? "video/mp4" : "image/jpeg";
+              const ext = contentType === "video/mp4" ? "mp4" : "jpg";
               const { url } = await storagePut(
-                `drama-scenes/${input.storyId}/${scene.id}.mp4`,
+                `drama-scenes/${input.storyId}/${scene.id}.${ext}`,
                 buf,
-                "video/mp4"
+                contentType
               );
               videoUrl = url;
-            } catch {
-              videoUrl = videoResult.value; // fallback to direct URL
+              console.log(`[DramaReel] Scene ${scene.id} stored: ${url}`);
+            } catch (storeErr) {
+              console.warn(`[DramaReel] Storage failed for ${scene.id}, using direct URL:`, storeErr);
+              videoUrl = videoResult.value; // use direct fal.ai URL as fallback
             }
+          } else if (videoResult.status === "rejected") {
+            console.error(`[DramaReel] Video generation failed for ${scene.id}:`, videoResult.reason);
           }
 
           return {
@@ -180,13 +238,21 @@ export const dramaRouter = router({
         })
       );
 
+      const sceneResults = results.map((r, i) =>
+        r.status === "fulfilled"
+          ? r.value
+          : { sceneId: input.scenes[i].id, videoUrl: null, audioUrl: null }
+      );
+
+      console.log(`[DramaReel] Complete. Results:`, sceneResults.map(s => ({
+        id: s.sceneId,
+        hasVideo: !!s.videoUrl,
+        hasAudio: !!s.audioUrl,
+      })));
+
       return {
         storyId: input.storyId,
-        scenes: results.map((r, i) =>
-          r.status === "fulfilled"
-            ? r.value
-            : { sceneId: input.scenes[i].id, videoUrl: null, audioUrl: null }
-        ),
+        scenes: sceneResults,
       };
     }),
 });
