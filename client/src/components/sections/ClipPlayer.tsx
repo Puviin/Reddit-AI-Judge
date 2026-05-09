@@ -1,8 +1,8 @@
-// DRAMAFORGE SCOUT — AI Clip Player Section
-// Courtroom animatic trailer with fal.ai video + ElevenLabs voice
-// Auto-plays scene by scene, falls back to animated cards
+// DRAMAFORGE SCOUT — Courtroom Clip Player
+// Full-screen video player with load-gating
+// Video is FRONT AND CENTER — no character images blocking it
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { clipScenes } from "@/lib/mockData";
 
@@ -11,307 +11,543 @@ interface ClipPlayerProps {
   onFinish: () => void;
 }
 
-const CHAR_IMAGES: Record<string, string> = {
-  Plaintiff: "https://d2xsxph8kpxj0f.cloudfront.net/120778827/HeMC8gyCqYdJz7iYnAFd8U/char_plaintiff-cmbVj2wtDZwKYqA4tkwQ7K.webp",
-  Defendant: "https://d2xsxph8kpxj0f.cloudfront.net/120778827/HeMC8gyCqYdJz7iYnAFd8U/char_defendant-bvyV8J4edbFiRJRXLKtG7c.webp",
-  Judge: "https://d2xsxph8kpxj0f.cloudfront.net/120778827/HeMC8gyCqYdJz7iYnAFd8U/char_judge-fkcYYmvfKxmx2rg4rZEzY9.webp",
-  Witness: "https://d2xsxph8kpxj0f.cloudfront.net/120778827/HeMC8gyCqYdJz7iYnAFd8U/char_witness-FJyE4XFzTg2HGnHbXpPxj4.webp",
-  Narrator: "https://d2xsxph8kpxj0f.cloudfront.net/120778827/HeMC8gyCqYdJz7iYnAFd8U/hero_bg-mUp84k8qRsngJYjHVe4Cir.webp",
-};
-
 const ROLE_COLORS: Record<string, string> = {
   Plaintiff: "#FF1744",
   Defendant: "#4A90D9",
   Judge: "#FFD700",
   Witness: "#2ECC71",
-  Narrator: "rgba(255,255,255,0.6)",
+  Narrator: "rgba(255,255,255,0.7)",
 };
 
-// Build courtroom video prompts
-function buildVideoPrompts(scenes: { speakerRole: string }[]) {
-  const prompts: Record<string, string> = {
-    Plaintiff: "Anime manga style, passionate woman in red blazer pointing dramatically at camera, courtroom background, speed lines, intense expression, red and white color scheme",
-    Defendant: "Anime manga style, nervous man with hands raised defensively, courtroom background, blue lighting, sweat drops, manga impact lines",
-    Judge: "Anime manga style, imposing judge with white wig raising golden gavel, dramatic light beam, golden scales of justice, black and gold",
-    Witness: "Anime manga style, excited eccentric woman with wild grey hair gesturing enthusiastically, courtroom background, green accents",
-    Narrator: "Anime manga style, dramatic courtroom establishing shot, golden light rays, dark atmosphere, speed lines, cinematic composition",
-  };
-  return scenes.map((s) => prompts[s.speakerRole] || prompts.Narrator);
-}
+// Manga-style video prompts per role
+const ROLE_PROMPTS: Record<string, string> = {
+  Plaintiff: "Anime manga style, passionate young woman in red blazer pointing dramatically at camera, courtroom background, speed lines, intense righteous expression, red and white color scheme, close-up shot",
+  Defendant: "Anime manga style, nervous young man with hands raised defensively, blue dramatic lighting, sweat drops, manga impact lines, desperate wide-eyed expression",
+  Judge: "Anime manga style, imposing judge with white wig raising golden gavel, dramatic light beam from above, golden scales of justice, black and gold composition, epic wide shot",
+  Witness: "Anime manga style, excited eccentric woman with wild grey hair gesturing enthusiastically, courtroom background, green accents, speech bubbles",
+  Narrator: "Anime manga style, dramatic courtroom establishing shot, golden light rays, dark atmosphere, speed lines, cinematic wide angle composition",
+};
 
-type SceneMedia = { videoUrl: string | null; audioUrl: string | null };
+type SceneMedia = {
+  videoUrl: string | null;
+  audioUrl: string | null;
+  videoReady: boolean;
+  audioReady: boolean;
+};
+
+type LoadState = "idle" | "generating" | "loading" | "ready";
 
 export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
   const scenes = clipScenes[storyId] || clipScenes["story-001"];
   const [currentScene, setCurrentScene] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [finished, setFinished] = useState(false);
-  const [sceneProgress, setSceneProgress] = useState(0);
   const [sceneMedia, setSceneMedia] = useState<Record<string, SceneMedia>>({});
-  const [generating, setGenerating] = useState(false);
-  const [generated, setGenerated] = useState(false);
+  const [loadState, setLoadState] = useState<LoadState>("idle");
+  const [loadProgress, setLoadProgress] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const progressRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const generateReel = trpc.drama.generateDramaReel.useMutation({
     onSuccess: (data) => {
       const map: Record<string, SceneMedia> = {};
       data.scenes.forEach((s) => {
-        map[s.sceneId] = { videoUrl: s.videoUrl, audioUrl: s.audioUrl };
+        map[s.sceneId] = {
+          videoUrl: s.videoUrl,
+          audioUrl: s.audioUrl,
+          videoReady: !s.videoUrl,
+          audioReady: !s.audioUrl,
+        };
       });
       setSceneMedia(map);
-      setGenerated(true);
-      setGenerating(false);
+      setLoadState("loading");
     },
     onError: () => {
-      setGenerated(true);
-      setGenerating(false);
+      setLoadState("ready");
     },
   });
 
+  const markVideoReady = useCallback((id: string) => {
+    setSceneMedia((prev) => ({ ...prev, [id]: { ...prev[id], videoReady: true } }));
+  }, []);
+
+  const markAudioReady = useCallback((id: string) => {
+    setSceneMedia((prev) => ({ ...prev, [id]: { ...prev[id], audioReady: true } }));
+  }, []);
+
+  // Track overall load progress
+  useEffect(() => {
+    if (loadState !== "loading") return;
+    const total = scenes.length * 2;
+    const ready = Object.values(sceneMedia).reduce(
+      (acc, m) => acc + (m.videoReady ? 1 : 0) + (m.audioReady ? 1 : 0), 0
+    );
+    const pct = Math.round((ready / total) * 100);
+    setLoadProgress(pct);
+    if (pct >= 100) setLoadState("ready");
+  }, [sceneMedia, loadState, scenes.length]);
+
+  // Preload all assets
+  useEffect(() => {
+    if (loadState !== "loading") return;
+    scenes.forEach((scene) => {
+      const key = `clip-${scene.id}`;
+      const media = sceneMedia[key];
+      if (!media) return;
+      if (media.videoUrl && !media.videoReady) {
+        const vid = document.createElement("video");
+        vid.preload = "auto";
+        vid.src = media.videoUrl;
+        vid.addEventListener("canplaythrough", () => markVideoReady(key), { once: true });
+        vid.addEventListener("error", () => markVideoReady(key), { once: true });
+        vid.load();
+      }
+      if (media.audioUrl && !media.audioReady) {
+        const aud = document.createElement("audio");
+        aud.preload = "auto";
+        aud.src = media.audioUrl;
+        aud.addEventListener("canplaythrough", () => markAudioReady(key), { once: true });
+        aud.addEventListener("error", () => markAudioReady(key), { once: true });
+        aud.load();
+      }
+    });
+  }, [loadState, sceneMedia]);
+
+  // Scene playback
+  useEffect(() => {
+    if (!playing) return;
+    if (timerRef.current) clearTimeout(timerRef.current);
+
+    const scene = scenes[currentScene];
+    const key = `clip-${scene.id}`;
+    const media = sceneMedia[key];
+
+    // Sync video element
+    if (videoRef.current) {
+      if (media?.videoUrl) {
+        videoRef.current.src = media.videoUrl;
+        videoRef.current.play().catch(() => {});
+      } else {
+        videoRef.current.src = "";
+      }
+    }
+
+    // Audio drives timing when available
+    if (audioRef.current && media?.audioUrl) {
+      audioRef.current.src = media.audioUrl;
+      audioRef.current.play().catch(() => {});
+      const onEnded = () => {
+        if (currentScene < scenes.length - 1) {
+          setCurrentScene((c) => c + 1);
+        } else {
+          setPlaying(false);
+          setFinished(true);
+        }
+      };
+      audioRef.current.addEventListener("ended", onEnded, { once: true });
+      return () => audioRef.current?.removeEventListener("ended", onEnded);
+    }
+
+    // Fallback: duration-based
+    timerRef.current = setTimeout(() => {
+      if (currentScene < scenes.length - 1) {
+        setCurrentScene((c) => c + 1);
+      } else {
+        setPlaying(false);
+        setFinished(true);
+      }
+    }, scene.duration * 1000);
+
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [playing, currentScene, sceneMedia]);
+
+  const handleSceneClick = (idx: number) => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; }
+    if (videoRef.current) videoRef.current.pause();
+    setPlaying(false);
+    setCurrentScene(idx);
+    setFinished(false);
+  };
+
   const handleGenerate = () => {
-    setGenerating(true);
-    const prompts = buildVideoPrompts(scenes);
+    setLoadState("generating");
     generateReel.mutate({
       storyId,
       storyTitle: storyId,
-      scenes: scenes.map((s: { id: number; narration: string; speakerRole: string }, i: number) => ({
+      scenes: scenes.map((s) => ({
         id: `clip-${s.id}`,
-        prompt: prompts[i],
+        prompt: ROLE_PROMPTS[s.speakerRole] || ROLE_PROMPTS.Narrator,
         narration: s.narration,
         speakerRole: s.speakerRole,
       })),
     });
   };
 
-  const clearTimers = () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (progressRef.current) clearInterval(progressRef.current);
-  };
-
-  const advanceScene = (idx: number) => {
-    clearTimers();
-    if (idx >= scenes.length) {
-      setPlaying(false);
-      setFinished(true);
-      return;
-    }
-    setCurrentScene(idx);
-    setSceneProgress(0);
-  };
-
-  useEffect(() => {
-    if (!playing) { clearTimers(); return; }
-
-    const scene = scenes[currentScene];
-    const media = sceneMedia[`clip-${scene.id}`];
-
-    // If audio available, let it drive timing
-    if (media?.audioUrl && audioRef.current) {
-      audioRef.current.src = media.audioUrl;
-      audioRef.current.play().catch(() => {});
-      const onEnded = () => advanceScene(currentScene + 1);
-      audioRef.current.addEventListener("ended", onEnded, { once: true });
-      return () => audioRef.current?.removeEventListener("ended", onEnded);
-    }
-
-    // Fallback: duration-based
-    const duration = scene.duration * 1000;
-    const tickMs = 50;
-    let elapsed = 0;
-    progressRef.current = setInterval(() => {
-      elapsed += tickMs;
-      setSceneProgress(Math.min((elapsed / duration) * 100, 100));
-    }, tickMs);
-    timerRef.current = setTimeout(() => advanceScene(currentScene + 1), duration);
-
-    return clearTimers;
-  }, [playing, currentScene, sceneMedia]);
-
   const scene = scenes[currentScene];
-  const media = sceneMedia[`clip-${scene.id}`];
-  const charImg = CHAR_IMAGES[scene.speakerRole] || CHAR_IMAGES.Narrator;
+  const sceneKey = `clip-${scene.id}`;
+  const media = sceneMedia[sceneKey];
   const roleColor = ROLE_COLORS[scene.speakerRole] || "white";
 
   return (
-    <div className="min-h-screen py-16 px-4" style={{ background: "#0A0E1A" }}>
+    <div className="min-h-screen" style={{ background: "#050810" }}>
       <audio ref={audioRef} style={{ display: "none" }} />
-      <div className="max-w-4xl mx-auto">
-        <div className="text-center mb-10">
-          <span className="impact-badge text-sm mb-4 inline-block">Step 7 — Courtroom Clip</span>
-          <h2 style={{ fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: "clamp(2.5rem, 6vw, 4.5rem)", color: "white", letterSpacing: "0.05em" }}>
-            THE <span style={{ color: "#FF1744" }}>CLIP</span>
-          </h2>
-        </div>
 
-        {/* Main player */}
-        <div className="manga-panel rounded-lg overflow-hidden mb-6" style={{ background: "#0a0a14", minHeight: "420px" }}>
+      {/* ── FULL-SCREEN VIDEO STAGE ── */}
+      <div
+        className="relative w-full"
+        style={{ aspectRatio: "16/9", maxHeight: "80vh", background: "#000", overflow: "hidden" }}
+      >
+        {/* ── VIDEO — FRONT AND CENTER, FULL BLEED ── */}
+        {media?.videoUrl ? (
+          <video
+            ref={videoRef}
+            key={`${sceneKey}-${media.videoUrl}`}
+            src={media.videoUrl}
+            autoPlay={playing}
+            loop
+            playsInline
+            className="absolute inset-0 w-full h-full object-cover"
+            style={{ zIndex: 1 }}
+          />
+        ) : (
+          /* Animated fallback — speed lines + radial glow */
           <div
-            className="relative flex flex-col md:flex-row items-stretch"
-            style={{ minHeight: "360px", background: scene.bgColor, overflow: "hidden" }}
-            key={currentScene}
+            className="absolute inset-0"
+            key={`fallback-${currentScene}`}
+            style={{
+              zIndex: 1,
+              background: `
+                radial-gradient(ellipse 60% 60% at 50% 50%, ${roleColor}18 0%, transparent 70%),
+                radial-gradient(ellipse 100% 100% at 50% 50%, #050810 60%, #0A0E1A 100%)
+              `,
+            }}
           >
-            {/* Speed lines */}
-            <div className="absolute inset-0 speed-lines opacity-30 pointer-events-none" />
-
-            {/* Background video if available */}
-            {media?.videoUrl && (
-              <video
-                ref={videoRef}
-                key={media.videoUrl}
-                src={media.videoUrl}
-                autoPlay loop muted playsInline
-                className="absolute inset-0 w-full h-full object-cover opacity-50"
-              />
-            )}
-
-            {/* Character image */}
-            <div className="relative z-10 flex-shrink-0 flex items-end justify-center p-6 md:w-64">
-              <img
-                src={charImg}
-                alt={scene.speakerRole}
-                className="h-48 md:h-64 object-contain drop-shadow-2xl animate-slide-left"
-                style={{ filter: `drop-shadow(0 0 20px ${roleColor}60)` }}
-              />
-            </div>
-
-            {/* Scene content */}
-            <div className="relative z-10 flex-1 flex flex-col justify-center p-6 md:p-8">
-              <div className="mb-4 animate-slide-right" style={{ animationDelay: "0.1s" }}>
-                <span className="text-xs uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.3)", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>
-                  Scene {currentScene + 1} of {scenes.length}
-                </span>
-                <div style={{ fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: "2rem", letterSpacing: "0.1em", color: scene.accentColor, textShadow: `0 0 20px ${scene.accentColor}60` }}>
-                  {scene.title}
-                </div>
-              </div>
-
-              <div className="mb-4 animate-slide-right" style={{ animationDelay: "0.2s" }}>
-                <span className="text-xs px-3 py-1 uppercase tracking-wider" style={{
-                  fontFamily: "'Bebas Neue', Impact, sans-serif",
-                  background: `${roleColor}20`,
-                  border: `1px solid ${roleColor}50`,
-                  color: roleColor,
-                  clipPath: "polygon(6px 0%, 100% 0%, calc(100% - 6px) 100%, 0% 100%)",
-                }}>
-                  {scene.speaker} · {scene.speakerRole}
-                </span>
-              </div>
-
-              <div className="animate-slide-right" style={{ animationDelay: "0.3s" }}>
-                <p style={{ fontFamily: "Noto Sans, sans-serif", fontSize: "1.1rem", lineHeight: 1.7, color: "rgba(255,255,255,0.9)", fontStyle: scene.speakerRole !== "Narrator" ? "italic" : "normal" }}>
-                  {scene.speakerRole !== "Narrator" ? `"${scene.narration}"` : scene.narration}
-                </p>
-              </div>
-
-              <div className="mt-4 flex gap-2 animate-fade-in" style={{ animationDelay: "0.5s" }}>
-                {media?.videoUrl ? (
-                  <span className="text-[10px] px-2 py-1 rounded" style={{ background: "rgba(255,107,53,0.15)", border: "1px solid rgba(255,107,53,0.3)", color: "rgba(255,107,53,0.8)", fontFamily: "Noto Sans, sans-serif" }}>
-                    🎬 fal.ai Video
-                  </span>
-                ) : (
-                  <span className="text-[10px] px-2 py-1 rounded" style={{ background: "rgba(255,215,0,0.1)", border: "1px solid rgba(255,215,0,0.2)", color: "rgba(255,215,0,0.6)", fontFamily: "Noto Sans, sans-serif" }}>
-                    🔊 ElevenLabs Voice Ready · {scene.duration}s
-                  </span>
-                )}
-                {media?.audioUrl && (
-                  <span className="text-[10px] px-2 py-1 rounded" style={{ background: "rgba(46,204,113,0.15)", border: "1px solid rgba(46,204,113,0.3)", color: "rgba(46,204,113,0.8)", fontFamily: "Noto Sans, sans-serif" }}>
-                    🔊 ElevenLabs Voice
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Progress bar */}
-            {playing && !media?.audioUrl && (
-              <div className="absolute bottom-0 left-0 right-0 h-1" style={{ background: "rgba(255,255,255,0.1)" }}>
-                <div className="h-full transition-none" style={{ width: `${sceneProgress}%`, background: `linear-gradient(90deg, ${roleColor}, ${scene.accentColor})` }} />
-              </div>
-            )}
+            {/* Animated speed lines */}
+            <svg className="absolute inset-0 w-full h-full opacity-20" viewBox="0 0 800 450" preserveAspectRatio="xMidYMid slice">
+              {Array.from({ length: 24 }).map((_, i) => {
+                const angle = (i / 24) * 360;
+                const rad = (angle * Math.PI) / 180;
+                const x2 = 400 + Math.cos(rad) * 600;
+                const y2 = 225 + Math.sin(rad) * 600;
+                return (
+                  <line
+                    key={i}
+                    x1="400" y1="225"
+                    x2={x2} y2={y2}
+                    stroke={roleColor}
+                    strokeWidth={i % 3 === 0 ? "2" : "0.8"}
+                    strokeOpacity={i % 3 === 0 ? "0.6" : "0.3"}
+                  />
+                );
+              })}
+            </svg>
           </div>
+        )}
 
-          {/* Controls */}
-          <div className="flex items-center gap-4 p-4" style={{ background: "rgba(0,0,0,0.4)", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-            <button onClick={() => { clearTimers(); setPlaying(false); setFinished(false); setCurrentScene(0); setSceneProgress(0); }} className="p-2 rounded transition-colors hover:bg-white/10" style={{ color: "rgba(255,255,255,0.5)" }}>⟲</button>
-            <button
-              onClick={() => {
-                if (finished) { setFinished(false); setCurrentScene(0); setSceneProgress(0); }
-                setPlaying((p) => !p);
-              }}
-              className="px-6 py-2 font-bold uppercase tracking-wider transition-all hover:scale-105"
+        {/* Gradient overlay for text readability */}
+        <div
+          className="absolute inset-0"
+          style={{
+            zIndex: 2,
+            background: "linear-gradient(to bottom, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0) 35%, rgba(0,0,0,0.8) 100%)",
+          }}
+        />
+
+        {/* Scene title — top left */}
+        <div className="absolute top-5 left-6" style={{ zIndex: 3 }} key={`title-${currentScene}`}>
+          <div
+            className="animate-slide-right"
+            style={{
+              fontFamily: "'Bebas Neue', Impact, sans-serif",
+              fontSize: "clamp(1.8rem, 4.5vw, 3.5rem)",
+              letterSpacing: "0.1em",
+              color: scene.accentColor,
+              textShadow: `0 0 30px ${scene.accentColor}90, 0 2px 10px rgba(0,0,0,0.9)`,
+              lineHeight: 1,
+            }}
+          >
+            {scene.title}
+          </div>
+          <div className="mt-1.5">
+            <span
+              className="text-xs px-3 py-1 uppercase tracking-wider"
               style={{
                 fontFamily: "'Bebas Neue', Impact, sans-serif",
-                background: playing ? "rgba(255,215,0,0.2)" : "#FF1744",
-                color: playing ? "#FFD700" : "white",
-                border: playing ? "1px solid rgba(255,215,0,0.4)" : "none",
+                background: `${roleColor}25`,
+                border: `1px solid ${roleColor}60`,
+                color: roleColor,
                 clipPath: "polygon(6px 0%, 100% 0%, calc(100% - 6px) 100%, 0% 100%)",
               }}
             >
-              {playing ? "⏸ PAUSE" : finished ? "↺ REPLAY" : "▶ PLAY"}
-            </button>
-
-            <div className="flex items-center gap-2 ml-2">
-              {scenes.map((_, i) => (
-                <button key={i} onClick={() => { clearTimers(); setPlaying(false); advanceScene(i); }} className="w-2 h-2 rounded-full transition-all" style={{ background: i === currentScene ? "#FF1744" : i < currentScene ? "#FFD700" : "rgba(255,255,255,0.2)", transform: i === currentScene ? "scale(1.4)" : "scale(1)" }} />
-              ))}
-            </div>
-
-            {!generated && (
-              <button
-                onClick={handleGenerate}
-                disabled={generating}
-                className="ml-auto px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition-all hover:scale-105 disabled:opacity-50"
-                style={{
-                  fontFamily: "'Bebas Neue', Impact, sans-serif",
-                  background: "rgba(255,107,53,0.2)",
-                  color: "#FF6B35",
-                  border: "1px solid rgba(255,107,53,0.4)",
-                  clipPath: "polygon(4px 0%, 100% 0%, calc(100% - 4px) 100%, 0% 100%)",
-                }}
-              >
-                {generating ? "⚡ Generating..." : "🎬 Generate AI Video"}
-              </button>
-            )}
-
-            <span className="ml-auto text-xs" style={{ color: "rgba(255,255,255,0.3)", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>
-              {currentScene + 1} / {scenes.length}
+              {scene.speaker} · {scene.speakerRole}
             </span>
           </div>
         </div>
 
-        {/* Scene thumbnails */}
-        <div className="grid grid-cols-6 gap-2 mb-8">
-          {scenes.map((s, i) => (
-            <button key={s.id} onClick={() => { clearTimers(); setPlaying(false); advanceScene(i); }} className="rounded p-2 text-center transition-all hover:scale-105" style={{ background: i === currentScene ? "rgba(255,23,68,0.2)" : "rgba(255,255,255,0.04)", border: `1px solid ${i === currentScene ? "rgba(255,23,68,0.5)" : "rgba(255,255,255,0.08)"}` }}>
-              <div className="text-[10px] uppercase" style={{ color: i === currentScene ? "#FF1744" : "rgba(255,255,255,0.4)", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>
-                {s.title}
-              </div>
-              {sceneMedia[`clip-${s.id}`]?.videoUrl && <div className="text-[8px] mt-1" style={{ color: "rgba(255,107,53,0.6)" }}>🎬</div>}
-            </button>
-          ))}
+        {/* Scene counter — top right */}
+        <div className="absolute top-5 right-6" style={{ zIndex: 3 }}>
+          <span style={{ fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: "1rem", color: "rgba(255,255,255,0.45)", letterSpacing: "0.1em" }}>
+            {currentScene + 1} / {scenes.length}
+          </span>
         </div>
 
-        <div className="flex justify-center">
-          <button
-            onClick={onFinish}
-            className="px-12 py-3 font-bold uppercase tracking-widest transition-all duration-300 hover:scale-105"
+        {/* Subtitle — bottom center, cinema style */}
+        <div
+          className="absolute bottom-0 left-0 right-0 px-6 pb-5"
+          style={{ zIndex: 3 }}
+          key={`sub-${currentScene}`}
+        >
+          <div
+            className="animate-slide-up mx-auto max-w-3xl text-center px-5 py-3 rounded"
             style={{
-              fontFamily: "'Bebas Neue', Impact, sans-serif",
-              fontSize: "1.1rem",
-              letterSpacing: "0.2em",
-              background: finished ? "#FF1744" : "rgba(255,23,68,0.3)",
-              color: "white",
-              clipPath: "polygon(10px 0%, 100% 0%, calc(100% - 10px) 100%, 0% 100%)",
-              boxShadow: finished ? "0 0 30px rgba(255,23,68,0.5)" : "none",
-              border: finished ? "none" : "1px solid rgba(255,23,68,0.4)",
+              background: "rgba(0,0,0,0.78)",
+              backdropFilter: "blur(10px)",
+              border: `1px solid ${roleColor}25`,
             }}
           >
-            ⚖️ ENTER THE COURTROOM →
-          </button>
+            <p style={{
+              fontFamily: "Noto Sans, sans-serif",
+              fontSize: "clamp(0.85rem, 2vw, 1.1rem)",
+              lineHeight: 1.65,
+              color: "rgba(255,255,255,0.95)",
+              fontStyle: scene.speakerRole !== "Narrator" ? "italic" : "normal",
+            }}>
+              {scene.speakerRole !== "Narrator" ? `"${scene.narration}"` : scene.narration}
+            </p>
+          </div>
         </div>
+
+        {/* API badges — bottom right */}
+        <div className="absolute bottom-20 right-5 flex flex-col gap-1 items-end" style={{ zIndex: 3 }}>
+          {media?.videoUrl && (
+            <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: "rgba(255,107,53,0.2)", border: "1px solid rgba(255,107,53,0.4)", color: "rgba(255,107,53,0.9)", fontFamily: "Noto Sans, sans-serif" }}>
+              🎬 fal.ai
+            </span>
+          )}
+          {media?.audioUrl && (
+            <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: "rgba(46,204,113,0.2)", border: "1px solid rgba(46,204,113,0.4)", color: "rgba(46,204,113,0.9)", fontFamily: "Noto Sans, sans-serif" }}>
+              🔊 ElevenLabs
+            </span>
+          )}
+        </div>
+
+        {/* ── LOADING OVERLAY — blocks play until all assets ready ── */}
+        {loadState === "loading" && (
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-center"
+            style={{ zIndex: 10, background: "rgba(5,8,16,0.93)", backdropFilter: "blur(6px)" }}
+          >
+            <div style={{ fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: "clamp(1.2rem, 3vw, 2rem)", letterSpacing: "0.2em", color: "#FFD700", marginBottom: "1.5rem" }}>
+              ⚡ LOADING ASSETS
+            </div>
+            <div className="w-72 h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.1)" }}>
+              <div
+                className="h-full rounded-full transition-all duration-300"
+                style={{ width: `${loadProgress}%`, background: "linear-gradient(90deg, #FF1744, #FFD700)" }}
+              />
+            </div>
+            <div className="mt-3 text-sm" style={{ color: "rgba(255,255,255,0.4)", fontFamily: "Noto Sans, sans-serif" }}>
+              {loadProgress}% — {scenes.length} video + audio scenes
+            </div>
+            <div className="mt-1.5 text-xs" style={{ color: "rgba(255,255,255,0.22)", fontFamily: "Noto Sans, sans-serif" }}>
+              Playback unlocks when all assets are ready
+            </div>
+          </div>
+        )}
+
+        {/* ── GENERATING OVERLAY ── */}
+        {loadState === "generating" && (
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-center"
+            style={{ zIndex: 10, background: "rgba(5,8,16,0.93)" }}
+          >
+            <div className="animate-pulse" style={{ fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: "clamp(1.5rem, 4vw, 2.5rem)", letterSpacing: "0.2em", color: "#FF6B35", marginBottom: "1rem" }}>
+              ⚡ GENERATING SCENES
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.4)", fontFamily: "Noto Sans, sans-serif", fontSize: "0.85rem" }}>
+              fal.ai video + ElevenLabs voice for {scenes.length} scenes...
+            </div>
+            <div className="mt-5 flex gap-2">
+              {scenes.map((_, i) => (
+                <div
+                  key={i}
+                  className="w-2.5 h-2.5 rounded-full animate-pulse"
+                  style={{ background: "#FF6B35", animationDelay: `${i * 0.18}s` }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── CONTROLS BAR ── */}
+      <div className="px-4 py-4" style={{ background: "#0A0E1A", borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+        <div className="max-w-5xl mx-auto">
+          <div className="flex items-center gap-3 mb-4 flex-wrap">
+
+            {/* Generate AI Video button */}
+            {loadState === "idle" && (
+              <button
+                onClick={handleGenerate}
+                className="px-5 py-2 font-bold uppercase tracking-wider transition-all hover:scale-105"
+                style={{
+                  fontFamily: "'Bebas Neue', Impact, sans-serif",
+                  fontSize: "0.85rem",
+                  letterSpacing: "0.15em",
+                  background: "#FF6B35",
+                  color: "white",
+                  clipPath: "polygon(7px 0%, 100% 0%, calc(100% - 7px) 100%, 0% 100%)",
+                  boxShadow: "0 0 16px rgba(255,107,53,0.35)",
+                }}
+              >
+                🎬 GENERATE AI VIDEO + VOICE
+              </button>
+            )}
+
+            {/* Loading indicator */}
+            {loadState === "loading" && (
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded-full animate-spin border-2 border-transparent" style={{ borderTopColor: "#FFD700" }} />
+                <span style={{ fontFamily: "Noto Sans, sans-serif", fontSize: "0.8rem", color: "rgba(255,215,0,0.7)" }}>
+                  Loading {loadProgress}%...
+                </span>
+              </div>
+            )}
+
+            {/* Play / Pause */}
+            {(loadState === "ready" || loadState === "idle") && (
+              <>
+                <button
+                  onClick={() => {
+                    if (timerRef.current) clearTimeout(timerRef.current);
+                    if (!playing && audioRef.current) { audioRef.current.src = ""; }
+                    if (finished) { setFinished(false); setCurrentScene(0); }
+                    setPlaying((p) => !p);
+                  }}
+                  className="px-8 py-2.5 font-bold uppercase tracking-wider transition-all hover:scale-105"
+                  style={{
+                    fontFamily: "'Bebas Neue', Impact, sans-serif",
+                    fontSize: "1rem",
+                    letterSpacing: "0.2em",
+                    background: playing ? "rgba(255,215,0,0.15)" : "#FF1744",
+                    color: playing ? "#FFD700" : "white",
+                    border: playing ? "1px solid rgba(255,215,0,0.4)" : "none",
+                    clipPath: "polygon(8px 0%, 100% 0%, calc(100% - 8px) 100%, 0% 100%)",
+                    boxShadow: playing ? "none" : "0 0 20px rgba(255,23,68,0.4)",
+                  }}
+                >
+                  {playing ? "⏸ PAUSE" : finished ? "↺ REPLAY" : "▶ PLAY CLIP"}
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (timerRef.current) clearTimeout(timerRef.current);
+                    if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; }
+                    if (videoRef.current) videoRef.current.pause();
+                    setPlaying(false);
+                    setCurrentScene(0);
+                    setFinished(false);
+                  }}
+                  className="p-2.5 rounded transition-colors hover:bg-white/10"
+                  style={{ color: "rgba(255,255,255,0.4)" }}
+                  title="Restart"
+                >
+                  ⟲
+                </button>
+              </>
+            )}
+
+            <span className="ml-auto text-xs" style={{ color: "rgba(255,255,255,0.2)", fontFamily: "'Bebas Neue', Impact, sans-serif", letterSpacing: "0.1em" }}>
+              STEP 7 — COURTROOM CLIP
+            </span>
+          </div>
+
+          {/* Scene thumbnail strip */}
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {scenes.map((s, i) => {
+              const key = `clip-${s.id}`;
+              const m = sceneMedia[key];
+              const isActive = i === currentScene;
+              const rc = ROLE_COLORS[s.speakerRole] || "white";
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => handleSceneClick(i)}
+                  className="flex-shrink-0 rounded overflow-hidden transition-all hover:scale-105"
+                  style={{
+                    width: "110px",
+                    border: `2px solid ${isActive ? rc : "rgba(255,255,255,0.07)"}`,
+                    background: isActive ? `${rc}12` : "rgba(255,255,255,0.02)",
+                    boxShadow: isActive ? `0 0 10px ${rc}40` : "none",
+                  }}
+                >
+                  {/* Thumbnail */}
+                  <div className="relative" style={{ height: "55px", background: "#0a0a14", overflow: "hidden" }}>
+                    {m?.videoUrl ? (
+                      <video
+                        src={m.videoUrl}
+                        muted playsInline
+                        className="w-full h-full object-cover"
+                        style={{ opacity: 0.65 }}
+                      />
+                    ) : (
+                      <div
+                        className="w-full h-full"
+                        style={{
+                          background: `radial-gradient(ellipse at center, ${rc}20, #0a0a14)`,
+                        }}
+                      />
+                    )}
+                    <div
+                      className="absolute top-1 left-1 w-4 h-4 rounded-full flex items-center justify-center text-[9px]"
+                      style={{ background: isActive ? "#FF1744" : "rgba(0,0,0,0.65)", color: "white", fontFamily: "'Bebas Neue', Impact, sans-serif" }}
+                    >
+                      {i + 1}
+                    </div>
+                    {m?.videoReady && m?.audioReady && (
+                      <div className="absolute top-1 right-1 text-[8px]" style={{ color: "#2ECC71" }}>✓</div>
+                    )}
+                  </div>
+                  <div className="px-1.5 py-1">
+                    <div
+                      className="text-[9px] uppercase truncate"
+                      style={{
+                        fontFamily: "'Bebas Neue', Impact, sans-serif",
+                        color: isActive ? rc : "rgba(255,255,255,0.35)",
+                        letterSpacing: "0.05em",
+                      }}
+                    >
+                      {s.title}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* ── ENTER COURTROOM BUTTON ── */}
+      <div className="flex justify-center py-8 px-4" style={{ background: "#0A0E1A" }}>
+        <button
+          onClick={onFinish}
+          className="px-14 py-3.5 font-bold uppercase tracking-widest transition-all duration-300 hover:scale-105"
+          style={{
+            fontFamily: "'Bebas Neue', Impact, sans-serif",
+            fontSize: "1.1rem",
+            letterSpacing: "0.2em",
+            background: finished ? "#FF1744" : "rgba(255,23,68,0.25)",
+            color: "white",
+            clipPath: "polygon(10px 0%, 100% 0%, calc(100% - 10px) 100%, 0% 100%)",
+            boxShadow: finished ? "0 0 30px rgba(255,23,68,0.5)" : "none",
+            border: finished ? "none" : "1px solid rgba(255,23,68,0.4)",
+          }}
+        >
+          ⚖️ ENTER THE COURTROOM →
+        </button>
       </div>
     </div>
   );
