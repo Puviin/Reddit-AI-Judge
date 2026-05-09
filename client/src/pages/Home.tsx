@@ -4,7 +4,6 @@
 
 import { useState } from "react";
 import HeroSection from "@/components/sections/HeroSection";
-import AdaptionPipeline from "@/components/sections/AdaptionPipeline";
 import StorySelection from "@/components/sections/StorySelection";
 import StoryAnalysis from "@/components/sections/StoryAnalysis";
 import ThemeSelection from "@/components/sections/ThemeSelection";
@@ -19,7 +18,6 @@ import type { Story } from "@/lib/mockData";
 
 export type AppStep =
   | "hero"
-  | "adaption"
   | "stories"
   | "analysis"
   | "theme"
@@ -42,7 +40,6 @@ interface AiAnalysis {
 
 const STEPS: { id: AppStep; label: string }[] = [
   { id: "hero", label: "Scout" },
-  { id: "adaption", label: "Pipeline" },
   { id: "stories", label: "Cases" },
   { id: "analysis", label: "Analysis" },
   { id: "theme", label: "Theme" },
@@ -68,7 +65,7 @@ export default function Home() {
 
   const handleStorySelect = (story: Story) => {
     setSelectedStory(story);
-    setAiAnalysis(null); // reset AI analysis for new story
+    setAiAnalysis(null);
     goTo("analysis");
   };
 
@@ -106,11 +103,7 @@ export default function Home() {
 
       <div id="main-content">
         {currentStep === "hero" && (
-          <HeroSection onStart={() => goTo("adaption")} />
-        )}
-
-        {currentStep === "adaption" && (
-          <AdaptionPipeline onContinue={() => goTo("stories")} />
+          <HeroSection onStart={() => goTo("stories")} />
         )}
 
         {currentStep === "stories" && (

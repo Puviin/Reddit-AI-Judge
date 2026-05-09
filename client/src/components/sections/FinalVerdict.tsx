@@ -227,7 +227,7 @@ export default function FinalVerdict({ storyId, onReplay, onReset, aiAnalysis }:
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     {[
-                      { name: "Adaption AI", desc: "Data pipeline & safety", color: "#FF6B35" },
+                      { name: "fal.ai", desc: "Video generation", color: "#FF6B35" },
                       { name: "Gemini", desc: "Story analysis & dialogue", color: "#4A90D9" },
                       { name: "ElevenLabs", desc: "Voice narration", color: "#2ECC71" },
                       { name: "Convex", desc: "Case persistence", color: "#FFD700" },

@@ -46,7 +46,7 @@ export default function HeroSection({ onStart }: HeroSectionProps) {
             Powered by
           </span>
           <div className="flex gap-2">
-            {["Adaption AI", "Gemini", "ElevenLabs", "Convex"].map((api) => (
+            {["fal.ai", "Gemini", "ElevenLabs", "Convex"].map((api) => (
               <span key={api} className="px-2 py-1 text-[10px] uppercase tracking-wider rounded" style={{ background: "rgba(255,215,0,0.1)", border: "1px solid rgba(255,215,0,0.3)", color: "#FFD700", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>
                 {api}
               </span>

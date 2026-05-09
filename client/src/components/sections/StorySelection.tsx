@@ -30,7 +30,7 @@ export default function StorySelection({ stories, onSelect }: StorySelectionProp
             CHOOSE YOUR <span style={{ color: "#FFD700" }}>CASE</span>
           </h2>
           <p className="mt-3 text-sm max-w-xl mx-auto" style={{ color: "rgba(255,255,255,0.5)", fontFamily: "Noto Sans, sans-serif" }}>
-            Each case has been processed through the Adaption AI pipeline. Select one to proceed to trial.
+            Each case has been analyzed by our AI pipeline. Select one to proceed to trial.
           </p>
         </div>
 
@@ -162,7 +162,7 @@ export default function StorySelection({ stories, onSelect }: StorySelectionProp
             </button>
           </div>
           <p className="mt-2 text-[10px]" style={{ color: "rgba(255,255,255,0.25)", fontFamily: "Noto Sans, sans-serif" }}>
-            Live Reddit scouting powered by Adaption AI — demo uses mock fallback
+            Live Reddit scouting powered by Gemini AI — demo uses curated cases
           </p>
         </div>
       </div>

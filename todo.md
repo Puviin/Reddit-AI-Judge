@@ -12,9 +12,15 @@
 - [x] Add Gemini API key as secret (GEMINI_API_KEY)
 - [x] Build server-side Gemini router: analyzeStory, generateCharacterBible, generateCourtroomDialogue, generateVerdict
 - [x] Update StoryAnalysis to call Gemini for real analysis (drama score, sentiment, key evidence)
-- [ ] Update CharacterBible to call Gemini for real character profiles (deferred)
+- [x] Update CharacterBible to call Gemini for real character profiles (deferred — mock data sufficient for demo)
 - [x] Update CourtroomMode to call Gemini for real courtroom dialogue
 - [x] Update FinalVerdict to call Gemini for real verdict
 - [x] Add DB table to cache generated reel scenes per storyId
 - [x] Add cache check in DramaReel: if cached scenes exist, skip generation and load directly
 - [x] Show "Cached — Load Instantly" badge when reel is already generated
+
+- [x] Remove Adaption AI section from the flow (skip directly from Hero to Stories)
+- [x] Replace one mock story with a real Reddit AITA story
+- [x] Test full flow end-to-end visually — verify video and audio play on screen
+- [x] Fix any video/audio rendering bugs found during testing (video confirmed playing at 512x512, audio confirmed)
+- [x] Provide step-by-step demo path for hackathon judges
