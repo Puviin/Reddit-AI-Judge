@@ -69,6 +69,13 @@ export default function Home() {
     goTo("analysis");
   };
 
+  // Called when a story is scouted from a Reddit URL — jump straight to analysis
+  const handleScoutedStory = (story: Story) => {
+    setSelectedStory(story);
+    setAiAnalysis(null);
+    goTo("analysis");
+  };
+
   const handleAnalysisContinue = (analysis?: AiAnalysis) => {
     if (analysis) setAiAnalysis(analysis);
     goTo("theme");
@@ -103,7 +110,10 @@ export default function Home() {
 
       <div id="main-content">
         {currentStep === "hero" && (
-          <HeroSection onStart={() => goTo("stories")} />
+          <HeroSection
+            onStart={() => goTo("stories")}
+            onScoutedStory={handleScoutedStory}
+          />
         )}
 
         {currentStep === "stories" && (
@@ -137,7 +147,7 @@ export default function Home() {
         {currentStep === "drama-reel" && selectedStory && (
           <DramaReel
             story={selectedStory}
-            theme={selectedTheme || "anime-courtroom"}
+            theme={selectedTheme || "anime-battle"}
             onContinue={() => goTo("clip")}
           />
         )}

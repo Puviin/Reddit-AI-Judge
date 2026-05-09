@@ -50,24 +50,9 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const generateReel = trpc.drama.generateDramaReel.useMutation({
-    onSuccess: (data) => {
-      const map: Record<string, SceneMedia> = {};
-      data.scenes.forEach((s) => {
-        map[s.sceneId] = {
-          videoUrl: s.videoUrl,
-          audioUrl: s.audioUrl,
-          videoReady: !s.videoUrl,
-          audioReady: !s.audioUrl,
-        };
-      });
-      setSceneMedia(map);
-      setLoadState("loading");
-    },
-    onError: () => {
-      setLoadState("ready");
-    },
-  });
+  // ClipPlayer uses the same startReelJob + polling approach as DramaReel
+  // This legacy mutation is kept for backward compat but not used
+  const generateReel = { mutate: (_: unknown) => {}, isPending: false };
 
   const markVideoReady = useCallback((id: string) => {
     setSceneMedia((prev) => ({ ...prev, [id]: { ...prev[id], videoReady: true } }));

@@ -299,6 +299,12 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
     startJob.mutate({
       storyId: story.id,
       storyTitle: story.title,
+      storyContext: {
+        summary: story.summary,
+        plaintiff: story.plaintiff,
+        defendant: story.defendant,
+      },
+      themeId: theme || "anime-battle",
       scenes: scenes.map(s => ({
         id: s.id,
         title: s.title,

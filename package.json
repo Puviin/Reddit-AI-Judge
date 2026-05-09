@@ -57,6 +57,7 @@
     "drizzle-orm": "^0.44.5",
     "elevenlabs": "^1.59.0",
     "embla-carousel-react": "^8.6.0",
+    "exa-js": "^2.12.1",
     "express": "^4.21.2",
     "framer-motion": "^12.23.22",
     "input-otp": "^1.4.2",

@@ -1,46 +1,91 @@
-// DRAMAFORGE SCOUT — Gemini AI Router
+// DRAMAFORGE SCOUT — AI Analysis Router
+// Primary: OpenAI GPT-4o | Fallback: Gemini 2.0 Flash
 // Powers: story analysis, character bibles, courtroom dialogue, verdicts
-// Model: gemini-2.0-flash (fast, cost-effective)
 
 import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
 
-const GEMINI_MODEL = "gemini-2.0-flash";
+// ─── OpenAI helper ───────────────────────────────────────────────────────────
+async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<string> {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error("OPENAI_API_KEY not set");
 
-async function callGemini(prompt: string, apiKey: string, jsonMode = false): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-
-  const body: Record<string, unknown> = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.8,
-      maxOutputTokens: 2048,
-      ...(jsonMode ? { responseMimeType: "application/json" } : {}),
-    },
-  };
-
-  const response = await fetch(url, {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.85,
+      max_tokens: 2000,
+      response_format: { type: "json_object" },
+    }),
   });
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`Gemini API error ${response.status}: ${err}`);
+    throw new Error(`OpenAI error ${response.status}: ${err.slice(0, 200)}`);
+  }
+
+  const data = await response.json() as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const text = data?.choices?.[0]?.message?.content ?? "";
+  if (!text) throw new Error("OpenAI returned empty response");
+  return text;
+}
+
+// ─── Gemini fallback ─────────────────────────────────────────────────────────
+async function callGemini(prompt: string): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set");
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.8, maxOutputTokens: 2048, responseMimeType: "application/json" },
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Gemini error ${response.status}: ${err.slice(0, 200)}`);
   }
 
   const data = await response.json() as {
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
   };
-
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
   if (!text) throw new Error("Gemini returned empty response");
   return text;
 }
 
+// ─── Unified AI call with OpenAI primary, Gemini fallback ────────────────────
+async function callAI(systemPrompt: string, userPrompt: string): Promise<string> {
+  try {
+    return await callOpenAI(systemPrompt, userPrompt);
+  } catch (err) {
+    console.warn("[AI] OpenAI failed, falling back to Gemini:", (err as Error).message);
+    return await callGemini(`${systemPrompt}\n\n${userPrompt}`);
+  }
+}
+
+function parseJSON<T>(raw: string): T {
+  const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+  return JSON.parse(cleaned) as T;
+}
+
+// ─── Router ──────────────────────────────────────────────────────────────────
 export const geminiRouter = router({
-  // Analyze a story: drama score, sentiment, key evidence, safety rating
   analyzeStory: publicProcedure
     .input(z.object({
       title: z.string(),
@@ -48,18 +93,14 @@ export const geminiRouter = router({
       comments: z.array(z.string()).optional(),
     }))
     .mutation(async ({ input }) => {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
-
-      const prompt = `You are DramaForge Scout, an AI that analyzes internet drama for entertainment value.
-
-Analyze this Reddit/internet drama story and return a JSON object:
+      const systemPrompt = "You are DramaForge Scout, an AI that analyzes internet drama for entertainment value. Always respond with valid JSON only.";
+      const userPrompt = `Analyze this Reddit/internet drama story and return a JSON object.
 
 STORY TITLE: ${input.title}
 STORY SUMMARY: ${input.summary}
 ${input.comments?.length ? `TOP COMMENTS:\n${input.comments.slice(0, 5).join("\n")}` : ""}
 
-Return ONLY valid JSON with this exact structure:
+Return JSON with this exact structure:
 {
   "dramaScore": <number 1-100, how dramatic/entertaining>,
   "safetyRating": <"WHOLESOME" | "MILD" | "SPICY" | "NUCLEAR">,
@@ -75,10 +116,8 @@ Return ONLY valid JSON with this exact structure:
   "funnyCommentHighlight": <pick the funniest/most insightful comment or write one if none provided>
 }`;
 
-      const raw = await callGemini(prompt, apiKey, true);
-      // Strip markdown code fences if present
-      const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      return JSON.parse(cleaned) as {
+      const raw = await callAI(systemPrompt, userPrompt);
+      return parseJSON<{
         dramaScore: number;
         safetyRating: string;
         sentiment: { plaintiff: number; defendant: number; publicOpinion: number };
@@ -87,10 +126,9 @@ Return ONLY valid JSON with this exact structure:
         verdictHint: string;
         tags: string[];
         funnyCommentHighlight: string;
-      };
+      }>(raw);
     }),
 
-  // Generate character bibles for the story
   generateCharacterBible: publicProcedure
     .input(z.object({
       title: z.string(),
@@ -99,17 +137,15 @@ Return ONLY valid JSON with this exact structure:
       defendant: z.string(),
     }))
     .mutation(async ({ input }) => {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
-
-      const prompt = `You are DramaForge Scout. Create anime-style character profiles for this internet drama case.
+      const systemPrompt = "You are DramaForge Scout. Create anime-style character profiles for internet drama cases. Always respond with valid JSON only.";
+      const userPrompt = `Create anime-style character profiles for this internet drama case.
 
 CASE: ${input.title}
 SUMMARY: ${input.summary}
 PLAINTIFF (person who feels wronged): ${input.plaintiff}
 DEFENDANT (person being accused): ${input.defendant}
 
-Return ONLY valid JSON:
+Return JSON:
 {
   "characters": [
     {
@@ -159,9 +195,8 @@ Return ONLY valid JSON:
   ]
 }`;
 
-      const raw = await callGemini(prompt, apiKey, true);
-      const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      return JSON.parse(cleaned) as {
+      const raw = await callAI(systemPrompt, userPrompt);
+      return parseJSON<{
         characters: Array<{
           id: string;
           name: string;
@@ -173,10 +208,9 @@ Return ONLY valid JSON:
           catchphrase: string;
           animeStyle: string;
         }>;
-      };
+      }>(raw);
     }),
 
-  // Generate courtroom dialogue for the trial
   generateCourtroomDialogue: publicProcedure
     .input(z.object({
       title: z.string(),
@@ -187,10 +221,8 @@ Return ONLY valid JSON:
       verdictHint: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
-
-      const prompt = `You are DramaForge Scout. Write a dramatic anime-style courtroom trial for this internet drama.
+      const systemPrompt = "You are DramaForge Scout. Write dramatic anime-style courtroom trials for internet drama cases. Always respond with valid JSON only.";
+      const userPrompt = `Write a dramatic anime-style courtroom trial for this internet drama.
 
 CASE: ${input.title}
 SUMMARY: ${input.summary}
@@ -200,7 +232,7 @@ KEY EVIDENCE: ${input.keyEvidence.join("; ")}
 
 Write exactly 8 courtroom exchanges. Make it dramatic, funny, and anime-inspired with objections, dramatic reveals, and emotional outbursts.
 
-Return ONLY valid JSON:
+Return JSON:
 {
   "exchanges": [
     {
@@ -213,9 +245,8 @@ Return ONLY valid JSON:
   ]
 }`;
 
-      const raw = await callGemini(prompt, apiKey, true);
-      const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      return JSON.parse(cleaned) as {
+      const raw = await callAI(systemPrompt, userPrompt);
+      return parseJSON<{
         exchanges: Array<{
           id: number;
           speaker: string;
@@ -223,10 +254,9 @@ Return ONLY valid JSON:
           text: string;
           reaction?: string;
         }>;
-      };
+      }>(raw);
     }),
 
-  // Generate the final verdict
   generateVerdict: publicProcedure
     .input(z.object({
       title: z.string(),
@@ -237,18 +267,17 @@ Return ONLY valid JSON:
       dramaScore: z.number().optional(),
     }))
     .mutation(async ({ input }) => {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
-
-      const prompt = `You are Judge Harrow of the DramaForge Court. Deliver the final verdict for this internet drama case.
+      const systemPrompt = "You are Judge Harrow of the DramaForge Court. Deliver dramatic verdicts for internet drama cases. Always respond with valid JSON only.";
+      const userPrompt = `Deliver the final verdict for this internet drama case.
 
 CASE: ${input.title}
 SUMMARY: ${input.summary}
 PLAINTIFF: ${input.plaintiff}
 DEFENDANT: ${input.defendant}
 KEY EVIDENCE: ${input.keyEvidence.join("; ")}
+${input.dramaScore ? `DRAMA SCORE: ${input.dramaScore}/100` : ""}
 
-Return ONLY valid JSON:
+Return JSON:
 {
   "verdict": <"NTA" | "YTA" | "ESH" | "NAH">,
   "verdictFull": <full verdict name, e.g. "NOT THE ASSHOLE">,
@@ -260,9 +289,8 @@ Return ONLY valid JSON:
   "closingStatement": <Judge Harrow's final dramatic line to close the case>
 }`;
 
-      const raw = await callGemini(prompt, apiKey, true);
-      const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      return JSON.parse(cleaned) as {
+      const raw = await callAI(systemPrompt, userPrompt);
+      return parseJSON<{
         verdict: string;
         verdictFull: string;
         ruling: string;
@@ -271,6 +299,6 @@ Return ONLY valid JSON:
         dissent: string;
         dramaRating: string;
         closingStatement: string;
-      };
+      }>(raw);
     }),
 });

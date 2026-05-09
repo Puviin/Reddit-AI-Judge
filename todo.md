@@ -24,3 +24,21 @@
 - [x] Test full flow end-to-end visually — verify video and audio play on screen
 - [x] Fix any video/audio rendering bugs found during testing (video confirmed playing at 512x512, audio confirmed)
 - [x] Provide step-by-step demo path for hackathon judges
+
+- [ ] Add EXA_API_KEY secret
+- [ ] Install exa-js SDK
+- [ ] Build server-side scoutRedditUrl endpoint using Exa to fetch Reddit post content + top comments
+- [ ] Parse Reddit post into Story format (title, content, comments, metadata)
+- [ ] Add Reddit URL input box to Hero section with "SCOUT THIS CASE" button
+- [ ] Wire frontend to scoutRedditUrl tRPC endpoint
+- [ ] On success, inject scouted story into the flow and advance to Analysis
+- [ ] Test with https://www.reddit.com/r/UnethicalLifeProTips/comments/1t6tudt/
+
+- [ ] Fix TypeScript errors in scouting flow (HeroSection + Home.tsx)
+- [ ] Verify scouting works with the ULPT Reddit URL
+- [ ] Switch fal.ai video model from fast-animatediff to bytedance/seedance-2.0/text-to-video
+- [ ] Build Gemini-powered scene prompt generator: takes story content + scene type → returns cinematic video prompt
+- [ ] Update drama router to use Gemini prompts per scene before calling fal.ai
+- [ ] Test seedance-2.0 video generation end-to-end
+- [ ] Make scene prompts theme-aware (Anime/Noir/Reality TV/etc. change visual style in Seedance prompts)
+- [ ] Pass selectedTheme from ThemeSelection through Home.tsx to DramaReel and ClipPlayer
