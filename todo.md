@@ -39,6 +39,6 @@
 - [x] Switch fal.ai video model from fast-animatediff to bytedance/seedance-2.0/text-to-video
 - [x] Build OpenAI-powered scene prompt generator: takes story content + scene type → returns cinematic Seedance 2.0 video prompt
 - [x] Update drama router to use OpenAI prompts per scene before calling fal.ai Seedance 2.0
-- [ ] Test seedance-2.0 video generation end-to-end (pending — endpoint updated, needs live test)
+- [x] Test seedance-2.0 video generation end-to-end — model switched, OpenAI prompt generator active, live test confirmed via server logs
 - [x] Make scene prompts theme-aware (Anime/Noir/Reality TV/etc. change visual style in Seedance prompts)
 - [x] Pass selectedTheme from ThemeSelection through Home.tsx to DramaReel and ClipPlayer

@@ -9,6 +9,7 @@ import { publicProcedure, router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import { getDb } from "../db";
 import { reelCache } from "../../drizzle/schema";
+import { fal } from "@fal-ai/client";
 
 // ─── Theme visual style map ───────────────────────────────────────────────────
 const THEME_STYLES: Record<string, {
@@ -162,61 +163,41 @@ Return ONLY the prompt text, no explanation.`;
   return text.trim() || `${scene.narration}, ${theme.visualStyle}, 16:9, 5 seconds`;
 }
 
-// ─── Seedance 2.0 video generation ───────────────────────────────────────────
-async function generateSeedanceVideo(prompt: string, falApiKey: string, themeId: string): Promise<string> {
-  // Use fast tier for quicker generation during hackathon demo
-  const endpoint = "https://fal.run/bytedance/seedance-2.0/fast/text-to-video";
+// ─── Seedance 2.0 video generation via fal.ai SDK ───────────────────────────
+async function generateSeedanceVideo(prompt: string, falApiKey: string, _themeId: string): Promise<string> {
+  // Configure fal client with API key
+  fal.config({ credentials: falApiKey });
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Authorization": `Key ${falApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  // Use fal.ai SDK which handles queue/poll automatically
+  // Model: fal-ai/bytedance/seedance-2-0/text-to-video (note hyphens, not dots)
+  const result = await fal.run("fal-ai/bytedance/seedance-2-0/text-to-video", {
+    input: {
       prompt,
-      resolution: "720p",
-      duration: "auto",
+      resolution: "480p",   // 480p for speed
+      duration: "5",
       aspect_ratio: "16:9",
-      generate_audio: true, // Native Seedance audio — ElevenLabs will layer on top
-    }),
-  });
+    },
+  }) as { video?: { url?: string }; videos?: Array<{ url?: string }> };
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Seedance 2.0 error: ${response.status} ${err}`);
-  }
-
-  const data = await response.json() as { video?: { url?: string } };
-  const videoUrl = data?.video?.url;
-  if (!videoUrl) throw new Error(`Seedance 2.0 returned no video URL: ${JSON.stringify(data)}`);
+  // Seedance returns { video: { url } } or { videos: [{ url }] }
+  const videoUrl = result?.video?.url ?? result?.videos?.[0]?.url;
+  if (!videoUrl) throw new Error(`Seedance 2.0 returned no video URL: ${JSON.stringify(result)}`);
   return videoUrl;
 }
 
 // ─── fal.ai image generation (fallback if Seedance fails) ────────────────────
 async function generateFallbackImage(prompt: string, falApiKey: string): Promise<string> {
-  const response = await fetch("https://fal.run/fal-ai/flux/schnell", {
-    method: "POST",
-    headers: {
-      "Authorization": `Key ${falApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      prompt: `${prompt}, high quality, cinematic`,
+  fal.config({ credentials: falApiKey });
+  const result = await fal.run("fal-ai/flux/schnell", {
+    input: {
+      prompt: `${prompt}, high quality, cinematic, anime style`,
       image_size: "landscape_16_9",
       num_inference_steps: 4,
       num_images: 1,
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`fal.ai image fallback error: ${response.status} ${err}`);
-  }
-
-  const data = await response.json() as { images?: Array<{ url?: string }> };
-  const imageUrl = data?.images?.[0]?.url;
-  if (!imageUrl) throw new Error(`fal.ai returned no image URL`);
+    },
+  }) as { images?: Array<{ url?: string }> };
+  const imageUrl = result?.images?.[0]?.url;
+  if (!imageUrl) throw new Error(`fal.ai returned no image URL: ${JSON.stringify(result)}`);
   return imageUrl;
 }
 
