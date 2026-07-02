@@ -69,14 +69,9 @@ async function callGemini(prompt: string): Promise<string> {
   return text;
 }
 
-// ─── Unified AI call with OpenAI primary, Gemini fallback ────────────────────
+// ─── Unified AI call — OpenAI only (Gemini quota exhausted) ────────────────────
 async function callAI(systemPrompt: string, userPrompt: string): Promise<string> {
-  try {
-    return await callOpenAI(systemPrompt, userPrompt);
-  } catch (err) {
-    console.warn("[AI] OpenAI failed, falling back to Gemini:", (err as Error).message);
-    return await callGemini(`${systemPrompt}\n\n${userPrompt}`);
-  }
+  return await callOpenAI(systemPrompt, userPrompt);
 }
 
 function parseJSON<T>(raw: string): T {
