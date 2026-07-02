@@ -1,6 +1,6 @@
 // DRAMAFORGE SCOUT — Drama Router
 // Handles fal.ai Seedance 2.0 video generation + ElevenLabs TTS + DB reel caching
-// Video model: bytedance/seedance-2.0/text-to-video (720p, native audio)
+// Video model: LTX 2.3 Fast text-to-video via fal.ai
 // Prompts: Gemini-generated 4-layer Seedance prompts, theme-aware
 
 import { z } from "zod";
@@ -163,25 +163,23 @@ Return ONLY the prompt text, no explanation.`;
   return text.trim() || `${scene.narration}, ${theme.visualStyle}, 16:9, 5 seconds`;
 }
 
-// ─── Seedance 2.0 video generation via fal.ai SDK ───────────────────────────
-async function generateSeedanceVideo(prompt: string, falApiKey: string, _themeId: string): Promise<string> {
-  // Configure fal client with API key
+// ─── LTX 2.3 Fast video generation via fal.ai SDK ───────────────────────────
+async function generateVideo(prompt: string, falApiKey: string): Promise<string> {
   fal.config({ credentials: falApiKey });
 
-  // Use fal.ai SDK which handles queue/poll automatically
-  // Model: fal-ai/bytedance/seedance-2-0/text-to-video (note hyphens, not dots)
-  const result = await fal.run("fal-ai/bytedance/seedance-2-0/text-to-video", {
+  const result = await fal.run("fal-ai/ltx-2.3/text-to-video/fast", {
     input: {
       prompt,
-      resolution: "480p",   // 480p for speed
-      duration: "5",
+      duration: "6",
+      resolution: "1080p",
       aspect_ratio: "16:9",
+      fps: "24",
+      generate_audio: false,
     },
-  }) as { video?: { url?: string }; videos?: Array<{ url?: string }> };
+  }) as { video?: { url?: string } };
 
-  // Seedance returns { video: { url } } or { videos: [{ url }] }
-  const videoUrl = result?.video?.url ?? result?.videos?.[0]?.url;
-  if (!videoUrl) throw new Error(`Seedance 2.0 returned no video URL: ${JSON.stringify(result)}`);
+  const videoUrl = result?.video?.url;
+  if (!videoUrl) throw new Error(`LTX 2.3 Fast returned no video URL: ${JSON.stringify(result)}`);
   return videoUrl;
 }
 
@@ -269,10 +267,10 @@ async function runReelJob(
       const [videoResult, audioResult] = await Promise.allSettled([
         falKey ? (async () => {
           try {
-            return await generateSeedanceVideo(videoPrompt, falKey, themeId);
-          } catch (seedanceErr) {
-            console.warn(`[Job ${jobId}] Seedance 2.0 failed, falling back to image:`, seedanceErr);
-            return await generateFallbackImage(videoPrompt, falKey);
+            return { url: await generateVideo(videoPrompt, falKey), isVideo: true };
+          } catch (videoErr) {
+            console.warn(`[Job ${jobId}] Video generation failed, falling back to image:`, videoErr);
+            return { url: await generateFallbackImage(videoPrompt, falKey), isVideo: false };
           }
         })() : Promise.resolve(null),
 
@@ -291,12 +289,11 @@ async function runReelJob(
       let videoUrl: string | null = null;
       if (videoResult.status === "fulfilled" && videoResult.value) {
         try {
-          const mediaUrl = videoResult.value;
+          const mediaUrl = videoResult.value.url;
           const mediaRes = await fetch(mediaUrl);
           const buf = Buffer.from(await mediaRes.arrayBuffer());
-          const isVideo = mediaUrl.includes(".mp4") || mediaUrl.includes("video");
-          const contentType = isVideo ? "video/mp4" : "image/jpeg";
-          const ext = isVideo ? "mp4" : "jpg";
+          const contentType = videoResult.value.isVideo ? "video/mp4" : "image/jpeg";
+          const ext = videoResult.value.isVideo ? "mp4" : "jpg";
           const { url } = await storagePut(
             `drama-scenes/${storyId}/${scene.id}.${ext}`,
             buf,
@@ -304,7 +301,7 @@ async function runReelJob(
           );
           videoUrl = url;
         } catch {
-          videoUrl = videoResult.value;
+          videoUrl = videoResult.value.url;
         }
       }
 

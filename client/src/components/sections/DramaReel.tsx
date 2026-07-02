@@ -100,6 +100,10 @@ const ROLE_COLORS: Record<string, string> = {
   Judge: "#FFD700",
 };
 
+function isImageUrl(url: string): boolean {
+  return /\.(jpe?g|png|webp|gif|avif)(?:[?#].*)?$/i.test(url);
+}
+
 const STATUS_ICONS: Record<GenStatus, string> = {
   queued: "○",
   generating: "◌",
@@ -345,7 +349,15 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
 
         {/* Video / Image — full bleed */}
         {media?.videoUrl ? (
-          media.videoUrl.endsWith(".mp4") || media.videoUrl.includes("video") ? (
+          isImageUrl(media.videoUrl) ? (
+            <img
+              key={`${scene.id}-${media.videoUrl}`}
+              src={media.videoUrl}
+              alt={scene.title}
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ zIndex: 1 }}
+            />
+          ) : (
             <video
               ref={videoRef}
               key={`${scene.id}-${media.videoUrl}`}
@@ -353,14 +365,6 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
               autoPlay={playing}
               loop
               playsInline
-              className="absolute inset-0 w-full h-full object-cover"
-              style={{ zIndex: 1 }}
-            />
-          ) : (
-            <img
-              key={`${scene.id}-${media.videoUrl}`}
-              src={media.videoUrl}
-              alt={scene.title}
               className="absolute inset-0 w-full h-full object-cover"
               style={{ zIndex: 1 }}
             />
@@ -630,10 +634,10 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
                 >
                   <div className="relative" style={{ height: "55px", background: "#0a0a14", overflow: "hidden" }}>
                     {m?.videoUrl ? (
-                      m.videoUrl.endsWith(".mp4") ? (
-                        <video src={m.videoUrl} muted playsInline className="w-full h-full object-cover" style={{ opacity: 0.7 }} />
-                      ) : (
+                      isImageUrl(m.videoUrl) ? (
                         <img src={m.videoUrl} alt={s.title} className="w-full h-full object-cover" style={{ opacity: 0.7 }} />
+                      ) : (
+                        <video src={m.videoUrl} muted playsInline className="w-full h-full object-cover" style={{ opacity: 0.7 }} />
                       )
                     ) : (
                       <div className="w-full h-full" style={{ background: `radial-gradient(ellipse at center, ${rc}20, #0a0a14)` }} />
