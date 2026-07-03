@@ -66,6 +66,7 @@ type JobScene = {
   status: SceneStatus;
   videoUrl: string | null;
   audioUrl: string | null;
+  mediaType?: "video" | "image"; // Track whether videoUrl is a video or image
   narration?: string;
   speakerRole?: string;
   error?: string;
@@ -306,6 +307,7 @@ async function runReelJob(
       }
 
       jobScene.videoUrl = videoUrl;
+      jobScene.mediaType = videoResult.status === "fulfilled" && videoResult.value?.isVideo ? "video" : "image";
       jobScene.audioUrl = audioResult.status === "fulfilled" ? audioResult.value : null;
       jobScene.status = "done";
       job.completed++;
@@ -485,6 +487,7 @@ export const dramaRouter = router({
           status: s.status,
           videoUrl: s.videoUrl,
           audioUrl: s.audioUrl,
+          mediaType: s.mediaType,
           error: s.error,
         })),
       };

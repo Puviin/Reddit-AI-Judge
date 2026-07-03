@@ -84,6 +84,7 @@ function buildScenes(story: Story): ReelScene[] {
 type SceneMedia = {
   videoUrl: string | null;
   audioUrl: string | null;
+  mediaType?: "video" | "image";
   videoReady: boolean;
   audioReady: boolean;
 };
@@ -100,9 +101,10 @@ const ROLE_COLORS: Record<string, string> = {
   Judge: "#FFD700",
 };
 
-function isImageUrl(url: string): boolean {
-  return /\.(jpe?g|png|webp|gif|avif)(?:[?#].*)?$/i.test(url);
-}
+// No longer needed — mediaType comes from API
+// function isImageUrl(url: string): boolean {
+//   return /\.(jpe?g|png|webp|gif|avif)(?:[?#].*)?$/i.test(url);
+// }
 
 const STATUS_ICONS: Record<GenStatus, string> = {
   queued: "○",
@@ -349,7 +351,7 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
 
         {/* Video / Image — full bleed */}
         {media?.videoUrl ? (
-          isImageUrl(media.videoUrl) ? (
+          media.mediaType === "image" ? (
             <img
               key={`${scene.id}-${media.videoUrl}`}
               src={media.videoUrl}
@@ -634,7 +636,7 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
                 >
                   <div className="relative" style={{ height: "55px", background: "#0a0a14", overflow: "hidden" }}>
                     {m?.videoUrl ? (
-                      isImageUrl(m.videoUrl) ? (
+                      m.mediaType === "image" ? (
                         <img src={m.videoUrl} alt={s.title} className="w-full h-full object-cover" style={{ opacity: 0.7 }} />
                       ) : (
                         <video src={m.videoUrl} muted playsInline className="w-full h-full object-cover" style={{ opacity: 0.7 }} />
