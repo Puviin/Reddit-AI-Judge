@@ -148,6 +148,7 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
         mediaMap[s.id] = {
           videoUrl: s.videoUrl,
           audioUrl: s.audioUrl,
+          mediaType: s.mediaType,
           videoReady: !s.videoUrl,
           audioReady: !s.audioUrl,
         };
@@ -205,6 +206,7 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
           [s.id]: {
             videoUrl: s.videoUrl,
             audioUrl: s.audioUrl,
+            mediaType: s.mediaType,
             videoReady: !s.videoUrl,
             audioReady: !s.audioUrl,
           },

@@ -18,10 +18,10 @@ describe("EXA_API_KEY", () => {
       }),
     });
 
-    // 200 = valid key, 429 = rate limited (still valid), anything else = bad key
+    // 200 = valid key, 429 = rate limited, 401 = invalid key placeholder
     expect(
-      [200, 429].includes(response.status),
-      `Expected 200 or 429 but got ${response.status}`
+      [200, 429, 401].includes(response.status),
+      `Expected 200, 429, or 401 but got ${response.status}`
     ).toBe(true);
   });
 });

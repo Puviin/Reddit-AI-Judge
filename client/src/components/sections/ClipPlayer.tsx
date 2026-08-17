@@ -31,6 +31,7 @@ const ROLE_PROMPTS: Record<string, string> = {
 type SceneMedia = {
   videoUrl: string | null;
   audioUrl: string | null;
+  mediaType?: "video" | "image";
   videoReady: boolean;
   audioReady: boolean;
 };
@@ -50,9 +51,50 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ClipPlayer uses the same startReelJob + polling approach as DramaReel
-  // This legacy mutation is kept for backward compat but not used
-  const generateReel = { mutate: (_: unknown) => {}, isPending: false };
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [genPercent, setGenPercent] = useState(0);
+
+  const startJob = trpc.drama.startReelJob.useMutation({
+    onSuccess: (data) => {
+      setJobId(data.jobId);
+    },
+    onError: () => {
+      setLoadState("ready");
+    },
+  });
+
+  const jobProgress = trpc.drama.getJobProgress.useQuery(
+    { jobId: jobId! },
+    {
+      enabled: !!jobId && loadState === "generating",
+      refetchInterval: 1500,
+    }
+  );
+
+  useEffect(() => {
+    const data = jobProgress.data;
+    if (!data) return;
+    setGenPercent(data.percent);
+
+    data.scenes.forEach(s => {
+      if (s.status === "done" && (s.videoUrl || s.audioUrl)) {
+        setSceneMedia(prev => ({
+          ...prev,
+          [s.id]: {
+            videoUrl: s.videoUrl,
+            audioUrl: s.audioUrl,
+            mediaType: s.mediaType,
+            videoReady: !s.videoUrl,
+            audioReady: !s.audioUrl,
+          },
+        }));
+      }
+    });
+
+    if (data.status === "done") {
+      setLoadState("loading");
+    }
+  }, [jobProgress.data]);
 
   const markVideoReady = useCallback((id: string) => {
     setSceneMedia((prev) => ({ ...prev, [id]: { ...prev[id], videoReady: true } }));
@@ -159,11 +201,18 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
 
   const handleGenerate = () => {
     setLoadState("generating");
-    generateReel.mutate({
+    startJob.mutate({
       storyId,
-      storyTitle: storyId,
+      storyTitle: `Courtroom Clip - ${storyId}`,
+      storyContext: {
+        summary: "Courtroom animatic playback",
+        plaintiff: "Plaintiff",
+        defendant: "Defendant",
+      },
+      themeId: "anime-battle",
       scenes: scenes.map((s) => ({
         id: `clip-${s.id}`,
+        title: s.speakerRole,
         prompt: ROLE_PROMPTS[s.speakerRole] || ROLE_PROMPTS.Narrator,
         narration: s.narration,
         speakerRole: s.speakerRole,
@@ -185,18 +234,28 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
         className="relative w-full"
         style={{ aspectRatio: "16/9", maxHeight: "80vh", background: "#000", overflow: "hidden" }}
       >
-        {/* ── VIDEO — FRONT AND CENTER, FULL BLEED ── */}
+        {/* ── VIDEO / IMAGE — FRONT AND CENTER, FULL BLEED ── */}
         {media?.videoUrl ? (
-          <video
-            ref={videoRef}
-            key={`${sceneKey}-${media.videoUrl}`}
-            src={media.videoUrl}
-            autoPlay={playing}
-            loop
-            playsInline
-            className="absolute inset-0 w-full h-full object-cover"
-            style={{ zIndex: 1 }}
-          />
+          media.mediaType === "image" ? (
+            <img
+              key={`${sceneKey}-${media.videoUrl}`}
+              src={media.videoUrl}
+              alt={scene.speakerRole}
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ zIndex: 1 }}
+            />
+          ) : (
+            <video
+              ref={videoRef}
+              key={`${sceneKey}-${media.videoUrl}`}
+              src={media.videoUrl}
+              autoPlay={playing}
+              loop
+              playsInline
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ zIndex: 1 }}
+            />
+          )
         ) : (
           /* Animated fallback — speed lines + radial glow */
           <div

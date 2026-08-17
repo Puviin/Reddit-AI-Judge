@@ -384,7 +384,7 @@ export const dramaRouter = router({
             sceneCount: row.sceneCount,
             scenes: row.scenes as Array<{
               id: string; title: string; narration: string; speakerRole: string;
-              videoUrl: string | null; audioUrl: string | null;
+              videoUrl: string | null; audioUrl: string | null; mediaType?: "video" | "image";
             }>,
             createdAt: row.createdAt,
           };
@@ -397,7 +397,7 @@ export const dramaRouter = router({
           sceneCount: row.sceneCount,
           scenes: row.scenes as Array<{
             id: string; title: string; narration: string; speakerRole: string;
-            videoUrl: string | null; audioUrl: string | null;
+            videoUrl: string | null; audioUrl: string | null; mediaType?: "video" | "image";
           }>,
           createdAt: row.createdAt,
         };

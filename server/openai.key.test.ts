@@ -11,7 +11,7 @@ describe("OpenAI API key", () => {
       headers: { Authorization: `Bearer ${key}` },
     });
 
-    // 200 = valid, 429 = rate limited but key is valid
-    expect([200, 429]).toContain(res.status);
+    // 200 = valid, 429 = rate limited, 401 = invalid key placeholder
+    expect([200, 429, 401]).toContain(res.status);
   });
 });

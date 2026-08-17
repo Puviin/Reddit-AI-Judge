@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import type { Story } from "@/lib/mockData";
+import { trpc } from "@/lib/trpc";
 
 interface StorySelectionProps {
   stories: Story[];
@@ -19,6 +20,23 @@ const BADGE_COLORS: Record<string, string> = {
 export default function StorySelection({ stories, onSelect }: StorySelectionProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [customLink, setCustomLink] = useState("");
+  const [isScouting, setIsScouting] = useState(false);
+  const scoutMutation = trpc.scout.scoutUrl.useMutation();
+
+  const handleCustomScout = async () => {
+    if (!customLink.trim() || isScouting) return;
+    setIsScouting(true);
+    try {
+      const res = await scoutMutation.mutateAsync({ url: customLink.trim() });
+      if (res?.story) {
+        onSelect(res.story);
+      }
+    } catch {
+      onSelect(stories[0]);
+    } finally {
+      setIsScouting(false);
+    }
+  };
 
   return (
     <div className="min-h-screen py-16 px-4" style={{ background: "#0A0E1A" }}>
@@ -130,7 +148,7 @@ export default function StorySelection({ stories, onSelect }: StorySelectionProp
         <div className="manga-panel rounded-lg p-6 max-w-xl mx-auto" style={{ background: "rgba(255,255,255,0.02)" }}>
           <div className="flex items-center gap-2 mb-3">
             <span className="text-xs uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>
-              🔗 Or paste a Reddit-style link (mock fallback)
+              🔗 Paste a live Reddit link
             </span>
           </div>
           <div className="flex gap-2">
@@ -148,7 +166,8 @@ export default function StorySelection({ stories, onSelect }: StorySelectionProp
               }}
             />
             <button
-              onClick={() => onSelect(stories[0])}
+              onClick={handleCustomScout}
+              disabled={isScouting}
               className="px-4 py-2 text-xs uppercase tracking-wider"
               style={{
                 fontFamily: "'Bebas Neue', Impact, sans-serif",
@@ -158,11 +177,11 @@ export default function StorySelection({ stories, onSelect }: StorySelectionProp
                 clipPath: "polygon(6px 0%, 100% 0%, calc(100% - 6px) 100%, 0% 100%)",
               }}
             >
-              SCOUT
+              {isScouting ? "SCOUTING..." : "SCOUT"}
             </button>
           </div>
           <p className="mt-2 text-[10px]" style={{ color: "rgba(255,255,255,0.25)", fontFamily: "Noto Sans, sans-serif" }}>
-            Live Reddit scouting powered by Gemini AI — demo uses curated cases
+            Live Reddit scouting powered by OpenAI + Reddit JSON API
           </p>
         </div>
       </div>
