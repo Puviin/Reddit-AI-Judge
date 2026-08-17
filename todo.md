@@ -43,7 +43,7 @@
 - [x] Make scene prompts theme-aware (Anime/Noir/Reality TV/etc. change visual style in Seedance prompts)
 - [x] Pass selectedTheme from ThemeSelection through Home.tsx to DramaReel and ClipPlayer
 
-- [ ] Comprehensive application audit (routers, client state, media caching, error handling)
-- [ ] Fix any latent runtime or TypeScript issues found during audit
-- [ ] Run full test suite and verify test coverage
-- [ ] Save final audit checkpoint and deliver report
+- [x] Comprehensive application audit (routers, client state, media caching, error handling)
+- [x] Fix any latent runtime or TypeScript issues found during audit
+- [x] Run full test suite and verify test coverage
+- [x] Save final audit checkpoint and deliver report
