@@ -92,41 +92,29 @@ async function generateSeedancePrompt(
 ): Promise<string> {
   const theme = THEME_STYLES[themeId] || DEFAULT_THEME_STYLE;
 
-  const systemPrompt = `You are a cinematic AI video director specializing in ${themeId} style content.
-You write optimal prompts for Seedance 2.0, ByteDance's text-to-video AI model.
+  const systemPrompt = `You are an elite anime director and prompt engineer for high-end cinematic video generation models (such as LTX-2.3, Kling, and AnimateDiff). 
+Your prompts must produce breathtaking, highly stylized, coherent manga motion comic visuals with zero gibberish.
 
-Seedance 2.0 prompt rules:
-1. Always specify shot structure upfront: number of shots, total duration, aspect ratio
-2. Dialogue/speech MUST be in "double quotes" for lip-sync
-3. Use the 4-layer structure: Primary Action → Dialogue/Sound → Environmental Audio → Visual Style
-4. Be specific about camera movements, lighting, and character actions
-5. Include SFX and ambient audio descriptions
-6. Keep prompts under 400 words
+Core Prompt Rules for Video Generation:
+1. Subject & Core Action: Define the primary character, pose, intense expression, and motion clearly in the opening clause.
+2. Art Direction & Theme: Incorporate bold manga lines, vibrant cel-shading, dynamic speed lines, and cinematic lighting matching the chosen theme.
+3. Environment & Atmosphere: Describe the courtroom setting, volumetric light rays, golden scales of justice, and dramatic background depth.
+4. Camera & Composition: Specify cinematic framing (e.g. Dutch angle, dramatic close-up, manga split-panel composition, 16:9 widescreen).
+5. Style Keywords: High contrast, masterwork, crisp line art, professional anime production keyframe.
+Keep the prompt under 150 words, rich in visual nouns and cinematic descriptors, and free of meta-instructions.`;
 
-Theme style to apply: ${theme.visualStyle}
-Camera style: ${theme.cameraStyle}
-Audio style: ${theme.audioStyle}
-Color palette: ${theme.colorPalette}`;
-
-  const userPrompt = `Generate a Seedance 2.0 video prompt for this scene:
+  const userPrompt = `Create a masterwork video generation prompt for this scene:
 
 STORY: ${storyContext.title}
 STORY SUMMARY: ${storyContext.summary}
-PLAINTIFF: ${storyContext.plaintiff}
-DEFENDANT: ${storyContext.defendant}
-
 SCENE: ${scene.title}
-SCENE NARRATION: ${scene.narration}
-SPEAKER ROLE: ${scene.speakerRole}
+NARRATION: ${scene.narration}
+SPEAKER: ${scene.speakerRole}
+THEME STYLE: ${theme.visualStyle}
+CAMERA: ${theme.cameraStyle}
+PALETTE: ${theme.colorPalette}
 
-Write a cinematic ${themeId}-style video prompt for this scene. Include:
-- Shot structure (2-3 shots, 5-8 seconds total, 16:9)
-- Character actions and expressions matching the drama
-- The narration text in "double quotes" as spoken dialogue
-- Environmental sounds and atmosphere
-- Visual style matching the theme
-
-Return ONLY the prompt text, no explanation.`;
+Write a vivid, highly coherent visual prompt that captures the intensity of this courtroom drama moment in 16:9 widescreen anime style. Return ONLY the final prompt text.`;
 
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!openaiKey) {
