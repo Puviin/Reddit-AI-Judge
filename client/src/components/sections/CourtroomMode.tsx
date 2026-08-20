@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { courtroomDialogue, characterBible, stories } from "@/lib/mockData";
 import { trpc } from "@/lib/trpc";
+import { errorMessage } from "@/lib/errors";
 
 interface CourtroomModeProps {
   storyId: string;
@@ -70,6 +71,9 @@ export default function CourtroomMode({ storyId, onContinue, aiAnalysis }: Court
       setAiDialogue(data.exchanges);
       setRevealed(1);
     },
+    onError: (err) => {
+      console.error("[CourtroomMode] Dialogue generation failed:", err);
+    },
   });
 
   useEffect(() => {
@@ -123,6 +127,15 @@ export default function CourtroomMode({ storyId, onContinue, aiAnalysis }: Court
             {dialogueMutation.isPending && (
               <span className="text-xs px-2 py-1 rounded animate-pulse" style={{ background: "rgba(255,215,0,0.15)", color: "#FFD700", fontFamily: "'Bebas Neue', Impact, sans-serif", letterSpacing: "0.1em" }}>
                 ⚡ GEMINI WRITING DIALOGUE...
+              </span>
+            )}
+            {dialogueMutation.error && (
+              <span
+                role="alert"
+                className="text-xs px-2 py-1 rounded"
+                style={{ background: "rgba(255,23,68,0.15)", color: "#FF6B6B", fontFamily: "Noto Sans, sans-serif" }}
+              >
+                ⚠ AI dialogue unavailable ({errorMessage(dialogueMutation.error, "unknown error")}) — showing the scripted trial
               </span>
             )}
             {aiDialogue && (

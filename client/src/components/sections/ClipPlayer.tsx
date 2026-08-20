@@ -5,6 +5,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { clipScenes } from "@/lib/mockData";
+import { playMedia } from "@/lib/media";
+import { errorMessage } from "@/lib/errors";
 
 interface ClipPlayerProps {
   storyId: string;
@@ -46,6 +48,7 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
   const [sceneMedia, setSceneMedia] = useState<Record<string, SceneMedia>>({});
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [loadProgress, setLoadProgress] = useState(0);
+  const [genError, setGenError] = useState("");
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -57,8 +60,11 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
   const startJob = trpc.drama.startReelJob.useMutation({
     onSuccess: (data) => {
       setJobId(data.jobId);
+      setGenError(data.warnings?.length ? data.warnings.join(" ") : "");
     },
-    onError: () => {
+    onError: (err) => {
+      console.error("[ClipPlayer] Failed to start clip job:", err);
+      setGenError(errorMessage(err, "Could not start AI video generation.") + " Playing the animatic without generated media.");
       setLoadState("ready");
     },
   });
@@ -72,9 +78,23 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
   );
 
   useEffect(() => {
+    if (!jobProgress.error) return;
+    console.error("[ClipPlayer] Job progress polling failed:", jobProgress.error);
+    setGenError(errorMessage(jobProgress.error, "Lost contact with the generation job."));
+    setLoadState("ready");
+  }, [jobProgress.error]);
+
+  useEffect(() => {
+    if (jobId && loadState === "generating" && jobProgress.isSuccess && jobProgress.data === null) {
+      setGenError("The generation job is no longer available on the server.");
+      setLoadState("ready");
+      return;
+    }
+
     const data = jobProgress.data;
     if (!data) return;
     setGenPercent(data.percent);
+    if (data.warnings?.length) setGenError(data.warnings.join(" "));
 
     data.scenes.forEach(s => {
       if (s.status === "done" && (s.videoUrl || s.audioUrl)) {
@@ -91,10 +111,21 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
       }
     });
 
+    if (data.status === "error") {
+      console.error("[ClipPlayer] Clip job failed:", data.error);
+      setGenError(data.error ?? "AI video generation failed.");
+      setLoadState("ready");
+      return;
+    }
+
     if (data.status === "done") {
+      const failed = data.scenes.filter(s => s.status === "error");
+      if (failed.length) {
+        setGenError(`${failed.length} of ${data.scenes.length} scenes failed to generate.`);
+      }
       setLoadState("loading");
     }
-  }, [jobProgress.data]);
+  }, [jobProgress.data, jobProgress.isSuccess, jobId, loadState]);
 
   const markVideoReady = useCallback((id: string) => {
     setSceneMedia((prev) => ({ ...prev, [id]: { ...prev[id], videoReady: true } }));
@@ -128,7 +159,10 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
         vid.preload = "auto";
         vid.src = media.videoUrl;
         vid.addEventListener("canplaythrough", () => markVideoReady(key), { once: true });
-        vid.addEventListener("error", () => markVideoReady(key), { once: true });
+        vid.addEventListener("error", () => {
+          console.error(`[ClipPlayer] Failed to preload video for ${key}: ${media.videoUrl}`);
+          markVideoReady(key);
+        }, { once: true });
         vid.load();
       }
       if (media.audioUrl && !media.audioReady) {
@@ -136,7 +170,10 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
         aud.preload = "auto";
         aud.src = media.audioUrl;
         aud.addEventListener("canplaythrough", () => markAudioReady(key), { once: true });
-        aud.addEventListener("error", () => markAudioReady(key), { once: true });
+        aud.addEventListener("error", () => {
+          console.error(`[ClipPlayer] Failed to preload audio for ${key}: ${media.audioUrl}`);
+          markAudioReady(key);
+        }, { once: true });
         aud.load();
       }
     });
@@ -155,7 +192,7 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
     if (videoRef.current) {
       if (media?.videoUrl) {
         videoRef.current.src = media.videoUrl;
-        videoRef.current.play().catch(() => {});
+        playMedia(videoRef.current, `clip scene ${scene.id} video`);
       } else {
         videoRef.current.src = "";
       }
@@ -164,7 +201,7 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
     // Audio drives timing when available
     if (audioRef.current && media?.audioUrl) {
       audioRef.current.src = media.audioUrl;
-      audioRef.current.play().catch(() => {});
+      playMedia(audioRef.current, `clip scene ${scene.id} audio`);
       const onEnded = () => {
         if (currentScene < scenes.length - 1) {
           setCurrentScene((c) => c + 1);
@@ -200,6 +237,7 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
   };
 
   const handleGenerate = () => {
+    setGenError("");
     setLoadState("generating");
     startJob.mutate({
       storyId,
@@ -430,6 +468,15 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
       {/* ── CONTROLS BAR ── */}
       <div className="px-4 py-4" style={{ background: "#0A0E1A", borderTop: "1px solid rgba(255,255,255,0.07)" }}>
         <div className="max-w-5xl mx-auto">
+          {genError && (
+            <div
+              role="alert"
+              className="mb-3 px-3 py-2 rounded text-xs"
+              style={{ background: "rgba(255,23,68,0.12)", border: "1px solid rgba(255,23,68,0.35)", color: "#FF6B6B", fontFamily: "Noto Sans, sans-serif" }}
+            >
+              ⚠ {genError}
+            </div>
+          )}
           <div className="flex items-center gap-3 mb-4 flex-wrap">
 
             {/* Generate AI Video button */}

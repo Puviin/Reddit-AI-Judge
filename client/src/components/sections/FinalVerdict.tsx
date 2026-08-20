@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { verdicts, stories } from "@/lib/mockData";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { trpc } from "@/lib/trpc";
+import { errorMessage } from "@/lib/errors";
 
 interface FinalVerdictProps {
   storyId: string;
@@ -50,6 +51,9 @@ export default function FinalVerdict({ storyId, onReplay, onReset, aiAnalysis }:
 
   const verdictMutation = trpc.gemini.generateVerdict.useMutation({
     onSuccess: (data) => setAiVerdict(data),
+    onError: (err) => {
+      console.error("[FinalVerdict] Verdict generation failed:", err);
+    },
   });
 
   useEffect(() => {
@@ -103,6 +107,11 @@ export default function FinalVerdict({ storyId, onReplay, onReset, aiAnalysis }:
           {verdictMutation.isPending && (
             <div className="mt-3 text-xs animate-pulse" style={{ color: "#FFD700", fontFamily: "'Bebas Neue', Impact, sans-serif", letterSpacing: "0.1em" }}>
               ⚡ JUDGE HARROW IS DELIBERATING...
+            </div>
+          )}
+          {verdictMutation.error && (
+            <div role="alert" className="mt-3 text-xs" style={{ color: "#FF6B6B", fontFamily: "Noto Sans, sans-serif" }}>
+              ⚠ AI verdict unavailable ({errorMessage(verdictMutation.error, "unknown error")}) — showing the scripted ruling
             </div>
           )}
           {aiVerdict && (

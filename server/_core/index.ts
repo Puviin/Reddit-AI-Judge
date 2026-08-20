@@ -42,6 +42,9 @@ async function startServer() {
     createExpressMiddleware({
       router: appRouter,
       createContext,
+      onError({ error, path, type }) {
+        console.error(`[tRPC] ${type} ${path ?? "<no-path>"} failed: ${error.code}`, error.cause ?? error);
+      },
     })
   );
   // development mode uses Vite, production mode uses static files
@@ -63,4 +66,11 @@ async function startServer() {
   });
 }
 
-startServer().catch(console.error);
+process.on("unhandledRejection", reason => {
+  console.error("[Process] Unhandled promise rejection:", reason);
+});
+
+startServer().catch(error => {
+  console.error("[Server] Failed to start:", error);
+  process.exit(1);
+});

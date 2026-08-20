@@ -4,6 +4,7 @@
 import { useState } from "react";
 import type { Story } from "@/lib/mockData";
 import { trpc } from "@/lib/trpc";
+import { errorMessage } from "@/lib/errors";
 
 interface StorySelectionProps {
   stories: Story[];
@@ -21,18 +22,22 @@ export default function StorySelection({ stories, onSelect }: StorySelectionProp
   const [hovered, setHovered] = useState<string | null>(null);
   const [customLink, setCustomLink] = useState("");
   const [isScouting, setIsScouting] = useState(false);
+  const [scoutError, setScoutError] = useState("");
   const scoutMutation = trpc.scout.scoutUrl.useMutation();
 
   const handleCustomScout = async () => {
     if (!customLink.trim() || isScouting) return;
     setIsScouting(true);
+    setScoutError("");
     try {
       const res = await scoutMutation.mutateAsync({ url: customLink.trim() });
-      if (res?.story) {
-        onSelect(res.story);
+      if (!res?.story) {
+        throw new Error("Scout returned no story for this URL.");
       }
-    } catch {
-      onSelect(stories[0]);
+      onSelect(res.story);
+    } catch (err) {
+      console.error("[StorySelection] Scouting failed:", err);
+      setScoutError(errorMessage(err, "Scouting this link failed. Try another Reddit URL or pick a case above."));
     } finally {
       setIsScouting(false);
     }
@@ -155,7 +160,7 @@ export default function StorySelection({ stories, onSelect }: StorySelectionProp
             <input
               type="text"
               value={customLink}
-              onChange={(e) => setCustomLink(e.target.value)}
+              onChange={(e) => { setCustomLink(e.target.value); setScoutError(""); }}
               placeholder="https://reddit.com/r/AmITheAsshole/..."
               className="flex-1 px-3 py-2 text-sm rounded outline-none"
               style={{
@@ -180,6 +185,15 @@ export default function StorySelection({ stories, onSelect }: StorySelectionProp
               {isScouting ? "SCOUTING..." : "SCOUT"}
             </button>
           </div>
+          {scoutError && (
+            <p
+              className="mt-2 text-xs"
+              role="alert"
+              style={{ color: "#FF1744", fontFamily: "Noto Sans, sans-serif" }}
+            >
+              ⚠ {scoutError}
+            </p>
+          )}
           <p className="mt-2 text-[10px]" style={{ color: "rgba(255,255,255,0.25)", fontFamily: "Noto Sans, sans-serif" }}>
             Live Reddit scouting powered by OpenAI + Reddit JSON API
           </p>

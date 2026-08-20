@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import type { Story } from "@/lib/mockData";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { trpc } from "@/lib/trpc";
+import { errorMessage } from "@/lib/errors";
 
 interface StoryAnalysisProps {
   story: Story;
@@ -33,6 +34,9 @@ export default function StoryAnalysis({ story, onContinue }: StoryAnalysisProps)
 
   const analyzeMutation = trpc.gemini.analyzeStory.useMutation({
     onSuccess: (data) => setAiAnalysis(data),
+    onError: (err) => {
+      console.error("[StoryAnalysis] AI analysis failed:", err);
+    },
   });
 
   useEffect(() => {
@@ -85,6 +89,15 @@ export default function StoryAnalysis({ story, onContinue }: StoryAnalysisProps)
               {analyzeMutation.isPending && (
                 <span className="text-xs px-2 py-1 rounded animate-pulse" style={{ background: "rgba(255,215,0,0.15)", color: "#FFD700", fontFamily: "'Bebas Neue', Impact, sans-serif", letterSpacing: "0.1em" }}>
                   ⚡ GEMINI ANALYZING...
+                </span>
+              )}
+              {analyzeMutation.error && (
+                <span
+                  role="alert"
+                  className="text-xs px-2 py-1 rounded"
+                  style={{ background: "rgba(255,23,68,0.15)", color: "#FF6B6B", fontFamily: "Noto Sans, sans-serif" }}
+                >
+                  ⚠ AI analysis unavailable ({errorMessage(analyzeMutation.error, "unknown error")}) — showing the base case file
                 </span>
               )}
               {aiAnalysis && (

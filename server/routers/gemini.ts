@@ -3,6 +3,7 @@
 // Powers: story analysis, character bibles, courtroom dialogue, verdicts
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { publicProcedure, router } from "../_core/trpc";
 
 // ─── OpenAI helper ───────────────────────────────────────────────────────────
@@ -74,9 +75,18 @@ async function callAI(systemPrompt: string, userPrompt: string): Promise<string>
   return await callOpenAI(systemPrompt, userPrompt);
 }
 
-function parseJSON<T>(raw: string): T {
+function parseJSON<T>(raw: string, context: string): T {
   const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-  return JSON.parse(cleaned) as T;
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch (err) {
+    console.error(`[AI] ${context}: model returned non-JSON payload:`, cleaned.slice(0, 500));
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `${context}: the AI response was not valid JSON`,
+      cause: err instanceof Error ? err : undefined,
+    });
+  }
 }
 
 // ─── Router ──────────────────────────────────────────────────────────────────
@@ -121,7 +131,7 @@ Return JSON with this exact structure:
         verdictHint: string;
         tags: string[];
         funnyCommentHighlight: string;
-      }>(raw);
+      }>(raw, "Story analysis");
     }),
 
   generateCharacterBible: publicProcedure
@@ -203,7 +213,7 @@ Return JSON:
           catchphrase: string;
           animeStyle: string;
         }>;
-      }>(raw);
+      }>(raw, "Character bible generation");
     }),
 
   generateCourtroomDialogue: publicProcedure
@@ -249,7 +259,7 @@ Return JSON:
           text: string;
           reaction?: string;
         }>;
-      }>(raw);
+      }>(raw, "Courtroom dialogue generation");
     }),
 
   generateVerdict: publicProcedure
@@ -294,6 +304,6 @@ Return JSON:
         dissent: string;
         dramaRating: string;
         closingStatement: string;
-      }>(raw);
+      }>(raw, "Verdict generation");
     }),
 });
