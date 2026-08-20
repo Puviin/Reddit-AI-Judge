@@ -3,12 +3,53 @@
 // Strategy 2: Exa search — fallback if Reddit API fails
 // Strategy 3: OpenAI generation from URL title — last resort
 
-import { publicProcedure, router } from "../_core/trpc";
+import { TRPCError } from "@trpc/server";
+import { rateLimited, router } from "../_core/trpc";
 import { z } from "zod";
 import Exa from "exa-js";
 
+const ALLOWED_REDDIT_HOSTS = new Set([
+  "reddit.com",
+  "www.reddit.com",
+  "old.reddit.com",
+  "new.reddit.com",
+  "np.reddit.com",
+  "m.reddit.com",
+]);
+
+/**
+ * Only https Reddit permalinks may be fetched server-side, so a submitted URL
+ * cannot be used to reach internal services or cloud metadata endpoints.
+ */
+function parseRedditUrl(rawUrl: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid URL" });
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    parsed.protocol !== "https:" ||
+    !ALLOWED_REDDIT_HOSTS.has(hostname) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.port
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Only https://reddit.com post URLs are supported",
+    });
+  }
+
+  return new URL(`https://www.reddit.com${parsed.pathname}`);
+}
+
 function getExa() {
-  return new Exa(process.env.EXA_API_KEY!);
+  const key = process.env.EXA_API_KEY;
+  if (!key) throw new Error("EXA_API_KEY not set");
+  return new Exa(key);
 }
 
 async function callOpenAI(prompt: string): Promise<string> {
@@ -38,8 +79,9 @@ async function callOpenAI(prompt: string): Promise<string> {
   });
 
   if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`OpenAI error ${response.status}: ${err.slice(0, 200)}`);
+    const err = await response.text().catch(() => "");
+    console.error(`[Scout] OpenAI error ${response.status}: ${err.slice(0, 200)}`);
+    throw new Error(`OpenAI request failed with status ${response.status}`);
   }
 
   const data = (await response.json()) as {
@@ -49,7 +91,7 @@ async function callOpenAI(prompt: string): Promise<string> {
 }
 
 // ─── Strategy 1: Reddit JSON API ─────────────────────────────────────────────
-async function fetchRedditJsonApi(url: string): Promise<{
+async function fetchRedditJsonApi(url: URL): Promise<{
   title: string;
   selftext: string;
   comments: string[];
@@ -58,15 +100,17 @@ async function fetchRedditJsonApi(url: string): Promise<{
   score: number;
 } | null> {
   try {
-    // Convert any reddit URL to the .json endpoint
-    const cleanUrl = url.replace(/\/$/, "");
-    const jsonUrl = `${cleanUrl}.json?limit=25&raw_json=1`;
+    // Convert the validated reddit permalink to its .json endpoint
+    const jsonUrl = new URL(`${url.toString().replace(/\/$/, "")}.json`);
+    jsonUrl.searchParams.set("limit", "25");
+    jsonUrl.searchParams.set("raw_json", "1");
 
     const response = await fetch(jsonUrl, {
       headers: {
         "User-Agent": "DramaForge/1.0 (hackathon project)",
         Accept: "application/json",
       },
+      redirect: "error",
       signal: AbortSignal.timeout(15000),
     });
 
@@ -125,10 +169,10 @@ async function fetchRedditJsonApi(url: string): Promise<{
 }
 
 export const scoutRouter = router({
-  scoutUrl: publicProcedure
-    .input(z.object({ url: z.string().url() }))
+  scoutUrl: rateLimited({ scope: "scout.scoutUrl", limit: 10, windowMs: 60_000 })
+    .input(z.object({ url: z.string().url().max(2048) }))
     .mutation(async ({ input }) => {
-      const { url } = input;
+      const url = parseRedditUrl(input.url).toString();
 
       // Extract subreddit and slug from URL
       const subredditMatch = url.match(/reddit\.com\/r\/([^/]+)/);
@@ -142,7 +186,7 @@ export const scoutRouter = router({
       let fetchedReal = false;
 
       // ── Strategy 1: Reddit JSON API (best — gets real post + comments) ──────
-      const redditData = await fetchRedditJsonApi(url);
+      const redditData = await fetchRedditJsonApi(new URL(url));
       if (redditData && (redditData.selftext.length > 20 || redditData.comments.length > 0)) {
         postTitle = redditData.title;
         postContent = redditData.selftext;

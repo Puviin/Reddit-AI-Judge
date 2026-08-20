@@ -3,7 +3,15 @@
 // Powers: story analysis, character bibles, courtroom dialogue, verdicts
 
 import { z } from "zod";
-import { publicProcedure, router } from "../_core/trpc";
+import { rateLimited, router } from "../_core/trpc";
+
+// Input caps keep untrusted text from inflating third-party token spend.
+const SHORT_TEXT = z.string().max(400);
+const LONG_TEXT = z.string().max(5000);
+const TEXT_LIST = z.array(z.string().max(1000)).max(20);
+
+const aiProcedure = (scope: string) =>
+  rateLimited({ scope, limit: 20, windowMs: 60_000 });
 
 // ─── OpenAI helper ───────────────────────────────────────────────────────────
 async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<string> {
@@ -29,8 +37,9 @@ async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<str
   });
 
   if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`OpenAI error ${response.status}: ${err.slice(0, 200)}`);
+    const err = await response.text().catch(() => "");
+    console.error(`[AI] OpenAI error ${response.status}: ${err.slice(0, 200)}`);
+    throw new Error(`OpenAI request failed with status ${response.status}`);
   }
 
   const data = await response.json() as {
@@ -57,8 +66,9 @@ async function callGemini(prompt: string): Promise<string> {
   });
 
   if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Gemini error ${response.status}: ${err.slice(0, 200)}`);
+    const err = await response.text().catch(() => "");
+    console.error(`[AI] Gemini error ${response.status}: ${err.slice(0, 200)}`);
+    throw new Error(`Gemini request failed with status ${response.status}`);
   }
 
   const data = await response.json() as {
@@ -81,11 +91,11 @@ function parseJSON<T>(raw: string): T {
 
 // ─── Router ──────────────────────────────────────────────────────────────────
 export const geminiRouter = router({
-  analyzeStory: publicProcedure
+  analyzeStory: aiProcedure("gemini.analyzeStory")
     .input(z.object({
-      title: z.string(),
-      summary: z.string(),
-      comments: z.array(z.string()).optional(),
+      title: SHORT_TEXT,
+      summary: LONG_TEXT,
+      comments: TEXT_LIST.optional(),
     }))
     .mutation(async ({ input }) => {
       const systemPrompt = "You are DramaForge Scout, an AI that analyzes internet drama for entertainment value. Always respond with valid JSON only.";
@@ -124,12 +134,12 @@ Return JSON with this exact structure:
       }>(raw);
     }),
 
-  generateCharacterBible: publicProcedure
+  generateCharacterBible: aiProcedure("gemini.generateCharacterBible")
     .input(z.object({
-      title: z.string(),
-      summary: z.string(),
-      plaintiff: z.string(),
-      defendant: z.string(),
+      title: SHORT_TEXT,
+      summary: LONG_TEXT,
+      plaintiff: SHORT_TEXT,
+      defendant: SHORT_TEXT,
     }))
     .mutation(async ({ input }) => {
       const systemPrompt = "You are DramaForge Scout. Create anime-style character profiles for internet drama cases. Always respond with valid JSON only.";
@@ -206,14 +216,14 @@ Return JSON:
       }>(raw);
     }),
 
-  generateCourtroomDialogue: publicProcedure
+  generateCourtroomDialogue: aiProcedure("gemini.generateCourtroomDialogue")
     .input(z.object({
-      title: z.string(),
-      summary: z.string(),
-      plaintiff: z.string(),
-      defendant: z.string(),
-      keyEvidence: z.array(z.string()),
-      verdictHint: z.string().optional(),
+      title: SHORT_TEXT,
+      summary: LONG_TEXT,
+      plaintiff: SHORT_TEXT,
+      defendant: SHORT_TEXT,
+      keyEvidence: TEXT_LIST,
+      verdictHint: SHORT_TEXT.optional(),
     }))
     .mutation(async ({ input }) => {
       const systemPrompt = "You are DramaForge Scout. Write dramatic anime-style courtroom trials for internet drama cases. Always respond with valid JSON only.";
@@ -252,14 +262,14 @@ Return JSON:
       }>(raw);
     }),
 
-  generateVerdict: publicProcedure
+  generateVerdict: aiProcedure("gemini.generateVerdict")
     .input(z.object({
-      title: z.string(),
-      summary: z.string(),
-      plaintiff: z.string(),
-      defendant: z.string(),
-      keyEvidence: z.array(z.string()),
-      dramaScore: z.number().optional(),
+      title: SHORT_TEXT,
+      summary: LONG_TEXT,
+      plaintiff: SHORT_TEXT,
+      defendant: SHORT_TEXT,
+      keyEvidence: TEXT_LIST,
+      dramaScore: z.number().min(0).max(100).optional(),
     }))
     .mutation(async ({ input }) => {
       const systemPrompt = "You are Judge Harrow of the DramaForge Court. Deliver dramatic verdicts for internet drama cases. Always respond with valid JSON only.";
