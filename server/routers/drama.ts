@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { publicProcedure, router } from "../_core/trpc";
+import { publicProcedure, rateLimited, router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import { getDb } from "../db";
 import { reelCache } from "../../drizzle/schema";
@@ -57,6 +57,8 @@ const THEME_STYLES: Record<string, {
 };
 
 const DEFAULT_THEME_STYLE = THEME_STYLES["anime-battle"];
+
+const THEME_IDS = Object.keys(THEME_STYLES) as [string, ...string[]];
 
 // ─── In-memory job store for progress tracking ───────────────────────────────
 type SceneStatus = "queued" | "generating" | "done" | "error";
@@ -204,8 +206,9 @@ async function generateVoice(text: string, elevenLabsKey: string, voiceId: strin
   });
 
   if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`ElevenLabs error: ${response.status} ${err}`);
+    const err = await response.text().catch(() => "");
+    console.error(`[Drama] ElevenLabs error ${response.status}: ${err.slice(0, 200)}`);
+    throw new Error(`ElevenLabs request failed with status ${response.status}`);
   }
 
   const buffer = await response.arrayBuffer();
@@ -351,8 +354,8 @@ export const dramaRouter = router({
   // Check if a reel is already cached for this story + theme combo
   getReelCache: publicProcedure
     .input(z.object({
-      storyId: z.string(),
-      themeId: z.string().optional(),
+      storyId: z.string().max(200),
+      themeId: z.string().max(100).optional(),
     }))
     .query(async ({ input }) => {
       try {
@@ -395,23 +398,23 @@ export const dramaRouter = router({
     }),
 
   // Start a background reel generation job — returns jobId immediately
-  startReelJob: publicProcedure
+  startReelJob: rateLimited({ scope: "drama.startReelJob", limit: 3, windowMs: 10 * 60_000 })
     .input(z.object({
-      storyId: z.string(),
-      storyTitle: z.string(),
+      storyId: z.string().max(200),
+      storyTitle: z.string().max(400),
       storyContext: z.object({
-        summary: z.string(),
-        plaintiff: z.string(),
-        defendant: z.string(),
+        summary: z.string().max(5000),
+        plaintiff: z.string().max(400),
+        defendant: z.string().max(400),
       }),
-      themeId: z.string().default("anime-battle"),
+      themeId: z.enum(THEME_IDS).default("anime-battle"),
       scenes: z.array(z.object({
-        id: z.string(),
-        title: z.string(),
-        prompt: z.string(),
-        narration: z.string(),
-        speakerRole: z.string(),
-      })),
+        id: z.string().max(200),
+        title: z.string().max(400),
+        prompt: z.string().max(2000),
+        narration: z.string().max(2000),
+        speakerRole: z.string().max(50),
+      })).min(1).max(12),
     }))
     .mutation(async ({ input }) => {
       const falKey = process.env.FAL_API_KEY;
@@ -457,7 +460,7 @@ export const dramaRouter = router({
 
   // Poll job progress — call every 2s from frontend
   getJobProgress: publicProcedure
-    .input(z.object({ jobId: z.string() }))
+    .input(z.object({ jobId: z.string().max(200) }))
     .query(({ input }) => {
       const job = jobs.get(input.jobId);
       if (!job) return null;

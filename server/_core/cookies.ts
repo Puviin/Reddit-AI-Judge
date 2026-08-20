@@ -1,4 +1,5 @@
 import type { CookieOptions, Request } from "express";
+import { ENV } from "./env";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
@@ -9,6 +10,9 @@ function isIpAddress(host: string) {
 }
 
 function isSecureRequest(req: Request) {
+  // SameSite=None cookies are only accepted with the Secure attribute, and the
+  // session cookie must never be sent in cleartext in production.
+  if (ENV.isProduction) return true;
   if (req.protocol === "https") return true;
 
   const forwardedProto = req.headers["x-forwarded-proto"];
