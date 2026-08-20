@@ -4,11 +4,14 @@
 // Strategy 3: OpenAI generation from URL title — last resort
 
 import { publicProcedure, router } from "../_core/trpc";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import Exa from "exa-js";
 
 function getExa() {
-  return new Exa(process.env.EXA_API_KEY!);
+  const key = process.env.EXA_API_KEY;
+  if (!key) throw new Error("EXA_API_KEY not set");
+  return new Exa(key);
 }
 
 async function callOpenAI(prompt: string): Promise<string> {
@@ -254,6 +257,8 @@ Return JSON:
       let topFunnySafeComments: string[] = [];
       let dramaScore = 75;
       let tags: string[] = [subreddit.replace(/_/g, " ")];
+      let aiParsed = false;
+      let aiError: Error | null = null;
 
       try {
         const raw = await callOpenAI(parsePrompt);
@@ -271,8 +276,20 @@ Return JSON:
         if (!postContent && parsed.conflict) {
           postContent = parsed.conflict;
         }
+        aiParsed = true;
       } catch (err) {
+        aiError = err instanceof Error ? err : new Error(String(err));
         console.error("[Scout] OpenAI parse failed:", err);
+      }
+
+      // Without fetched content the AI call *is* the story: failing silently here
+      // would return an empty case built from the URL slug.
+      if (!aiParsed && !hasContent) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Could not read the Reddit post and AI generation failed: ${aiError?.message ?? "unknown error"}`,
+          cause: aiError,
+        });
       }
 
       // Fallbacks

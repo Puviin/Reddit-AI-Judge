@@ -11,7 +11,7 @@ export async function getDb() {
     try {
       _db = drizzle(process.env.DATABASE_URL);
     } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
+      console.error("[Database] Failed to initialize connection from DATABASE_URL:", error);
       _db = null;
     }
   }

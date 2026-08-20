@@ -79,9 +79,15 @@ type Job = {
   scenes: JobScene[];
   status: "running" | "done" | "error";
   startedAt: number;
+  error?: string;
+  warnings: string[];
 };
 
 const jobs = new Map<string, Job>();
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 // ─── OpenAI theme-aware scene prompt generator ─────────────────────────────────
 async function generateSeedancePrompt(
@@ -232,7 +238,8 @@ async function runReelJob(
   elevenKey: string | undefined,
   _unusedKey?: string
 ) {
-  const job = jobs.get(jobId)!;
+  const job = jobs.get(jobId);
+  if (!job) throw new Error(`Job ${jobId} is no longer tracked; aborting reel generation`);
 
   for (let i = 0; i < scenes.length; i++) {
     const scene = scenes[i];
@@ -252,6 +259,8 @@ async function runReelJob(
       } catch (err) {
         console.warn(`[Job ${jobId}] OpenAI prompt gen failed, using fallback:`, err);
       }
+
+      const sceneErrors: string[] = [];
 
       const [videoResult, audioResult] = await Promise.allSettled([
         falKey ? (async () => {
@@ -275,11 +284,23 @@ async function runReelJob(
         })() : Promise.resolve(null),
       ]);
 
+      if (videoResult.status === "rejected") {
+        sceneErrors.push(`video: ${errorMessage(videoResult.reason)}`);
+        console.error(`[Job ${jobId}] Scene ${scene.id} visual generation failed:`, videoResult.reason);
+      }
+      if (audioResult.status === "rejected") {
+        sceneErrors.push(`audio: ${errorMessage(audioResult.reason)}`);
+        console.error(`[Job ${jobId}] Scene ${scene.id} narration failed:`, audioResult.reason);
+      }
+
       let videoUrl: string | null = null;
       if (videoResult.status === "fulfilled" && videoResult.value) {
         try {
           const mediaUrl = videoResult.value.url;
           const mediaRes = await fetch(mediaUrl);
+          if (!mediaRes.ok) {
+            throw new Error(`Fetching generated media failed (${mediaRes.status} ${mediaRes.statusText})`);
+          }
           const buf = Buffer.from(await mediaRes.arrayBuffer());
           const contentType = videoResult.value.isVideo ? "video/mp4" : "image/jpeg";
           const ext = videoResult.value.isVideo ? "mp4" : "jpg";
@@ -289,27 +310,44 @@ async function runReelJob(
             contentType
           );
           videoUrl = url;
-        } catch {
+        } catch (err) {
+          // Persisting to our own storage failed — fall back to the provider URL,
+          // but keep the reason visible instead of dropping it.
+          sceneErrors.push(`storage: ${errorMessage(err)}`);
+          console.error(`[Job ${jobId}] Scene ${scene.id} media persist failed, using provider URL:`, err);
           videoUrl = videoResult.value.url;
         }
       }
 
       jobScene.videoUrl = videoUrl;
-      jobScene.mediaType = videoResult.status === "fulfilled" && videoResult.value?.isVideo ? "video" : "image";
+      jobScene.mediaType = videoUrl
+        ? videoResult.status === "fulfilled" && videoResult.value?.isVideo
+          ? "video"
+          : "image"
+        : undefined;
       jobScene.audioUrl = audioResult.status === "fulfilled" ? audioResult.value : null;
-      jobScene.status = "done";
+      jobScene.error = sceneErrors.length ? sceneErrors.join("; ") : undefined;
+      const producedMedia = !!jobScene.videoUrl || !!jobScene.audioUrl;
+      jobScene.status = sceneErrors.length && !producedMedia ? "error" : "done";
       job.completed++;
 
       console.log(`[Job ${jobId}] Scene ${i + 1}/${scenes.length} done: ${scene.id} video=${!!videoUrl} audio=${!!jobScene.audioUrl}`);
     } catch (err) {
       jobScene.status = "error";
-      jobScene.error = err instanceof Error ? err.message : String(err);
+      jobScene.error = errorMessage(err);
       job.completed++;
       console.error(`[Job ${jobId}] Scene ${scene.id} failed:`, err);
     }
   }
 
-  job.status = "done";
+  const failedScenes = job.scenes.filter(s => s.status === "error");
+  job.status = failedScenes.length === job.scenes.length && job.scenes.length > 0 ? "error" : "done";
+  if (failedScenes.length) {
+    job.error = `${failedScenes.length}/${job.scenes.length} scenes failed: ${failedScenes
+      .map(s => `${s.id} (${s.error ?? "unknown error"})`)
+      .join("; ")}`;
+    console.error(`[Job ${jobId}] ${job.error}`);
+  }
   console.log(`[Job ${jobId}] Complete for story: ${storyTitle} (theme: ${themeId})`);
 
   // Persist completed reel to DB cache (keyed by storyId + themeId)
@@ -340,7 +378,11 @@ async function runReelJob(
       console.log(`[Job ${jobId}] Reel cached to DB for key: ${cacheKey}`);
     }
   } catch (err) {
-    console.error(`[Job ${jobId}] Failed to cache reel to DB:`, err);
+    // Caching is best-effort: the reel is already available in-memory, so surface
+    // the failure on the job instead of failing the whole run.
+    const message = `Failed to cache reel to DB: ${errorMessage(err)}`;
+    job.warnings.push(message);
+    console.error(`[Job ${jobId}] ${message}`, err);
   }
 
   // Clean up job after 10 minutes
@@ -389,7 +431,10 @@ export const dramaRouter = router({
           }>,
           createdAt: row.createdAt,
         };
-      } catch {
+      } catch (err) {
+        // A cache miss is expected; a cache *failure* is not, so make it visible
+        // in the logs rather than pretending nothing was cached.
+        console.error(`[Drama] Reel cache lookup failed for ${input.storyId}:`, err);
         return null;
       }
     }),
@@ -411,12 +456,17 @@ export const dramaRouter = router({
         prompt: z.string(),
         narration: z.string(),
         speakerRole: z.string(),
-      })),
+      })).min(1, "At least one scene is required"),
     }))
     .mutation(async ({ input }) => {
       const falKey = process.env.FAL_API_KEY;
       const elevenKey = process.env.ELEVENLABS_API_KEY;
       const geminiKey = process.env.GEMINI_API_KEY;
+
+      const warnings: string[] = [];
+      if (!falKey) warnings.push("FAL_API_KEY is not configured — scenes will have no visuals");
+      if (!elevenKey) warnings.push("ELEVENLABS_API_KEY is not configured — scenes will have no narration audio");
+      warnings.forEach(w => console.warn(`[Drama] ${w}`));
 
       const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -427,6 +477,7 @@ export const dramaRouter = router({
         completed: 0,
         status: "running",
         startedAt: Date.now(),
+        warnings,
         scenes: input.scenes.map(s => ({
           id: s.id,
           title: s.title,
@@ -450,9 +501,24 @@ export const dramaRouter = router({
         falKey,
         elevenKey,
         geminiKey
-      ).catch(err => console.error(`[Job ${jobId}] Unexpected error:`, err));
+      ).catch(err => {
+        // Without this the job would stay "running" forever and clients would
+        // poll indefinitely instead of seeing the failure.
+        const failed = jobs.get(jobId);
+        if (failed) {
+          failed.status = "error";
+          failed.error = errorMessage(err);
+          failed.scenes.forEach(s => {
+            if (s.status === "queued" || s.status === "generating") {
+              s.status = "error";
+              s.error = s.error ?? errorMessage(err);
+            }
+          });
+        }
+        console.error(`[Job ${jobId}] Unexpected error:`, err);
+      });
 
-      return { jobId, total: input.scenes.length };
+      return { jobId, total: input.scenes.length, warnings };
     }),
 
   // Poll job progress — call every 2s from frontend
@@ -465,9 +531,11 @@ export const dramaRouter = router({
       return {
         jobId: job.id,
         status: job.status,
+        error: job.error ?? null,
+        warnings: job.warnings,
         total: job.total,
         completed: job.completed,
-        percent: Math.round((job.completed / job.total) * 100),
+        percent: job.total > 0 ? Math.round((job.completed / job.total) * 100) : 100,
         elapsedMs: Date.now() - job.startedAt,
         scenes: job.scenes.map(s => ({
           id: s.id,

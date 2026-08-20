@@ -4,6 +4,8 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
+import { playMedia } from "@/lib/media";
+import { errorMessage } from "@/lib/errors";
 import type { Story } from "@/lib/mockData";
 
 interface DramaReelProps {
@@ -125,6 +127,8 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
   const [genPercent, setGenPercent] = useState(0);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [cacheLoaded, setCacheLoaded] = useState(false);
+  const [genError, setGenError] = useState("");
+  const [genWarnings, setGenWarnings] = useState<string[]>([]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -137,6 +141,11 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
     { storyId: story.id },
     { enabled: !cacheLoaded }
   );
+
+  useEffect(() => {
+    if (!reelCache.error) return;
+    console.error("[DramaReel] Reel cache lookup failed:", reelCache.error);
+  }, [reelCache.error]);
 
   useEffect(() => {
     if (!reelCache.data || cacheLoaded) return;
@@ -167,13 +176,17 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
   const startJob = trpc.drama.startReelJob.useMutation({
     onSuccess: (data) => {
       setJobId(data.jobId);
+      setGenError("");
+      setGenWarnings(data.warnings ?? []);
       startTimeRef.current = Date.now();
       // Start elapsed timer
       elapsedTimerRef.current = setInterval(() => {
         setElapsedSec(Math.floor((Date.now() - startTimeRef.current) / 1000));
       }, 1000);
     },
-    onError: () => {
+    onError: (err) => {
+      console.error("[DramaReel] Failed to start reel job:", err);
+      setGenError(errorMessage(err, "Could not start reel generation.") + " Falling back to script-only playback.");
       setAppState("ready"); // fallback to mock
     },
   });
@@ -187,10 +200,29 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
     }
   );
 
+  // Surface polling failures instead of spinning forever
+  useEffect(() => {
+    if (!jobProgress.error) return;
+    console.error("[DramaReel] Job progress polling failed:", jobProgress.error);
+    if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+    setGenError(errorMessage(jobProgress.error, "Lost contact with the generation job."));
+    setAppState("ready");
+  }, [jobProgress.error]);
+
   // Process job progress updates
   useEffect(() => {
+    if (jobId && appState === "generating" && jobProgress.isSuccess && jobProgress.data === null) {
+      // The server no longer knows this job (restart or expiry) — stop polling.
+      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+      setGenError("The generation job is no longer available on the server.");
+      setAppState("ready");
+      return;
+    }
+
     const data = jobProgress.data;
     if (!data) return;
+
+    if (data.warnings?.length) setGenWarnings(data.warnings);
 
     // Update per-scene gen status
     const newStatus: Record<string, GenStatus> = {};
@@ -214,12 +246,29 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
       }
     });
 
+    if (data.status === "error") {
+      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+      console.error("[DramaReel] Reel job failed:", data.error);
+      setGenError(data.error ?? "Reel generation failed.");
+      setAppState("ready");
+      return;
+    }
+
     // Job complete — move to loading phase
     if (data.status === "done") {
       if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+      const failed = data.scenes.filter(s => s.status === "error");
+      if (failed.length) {
+        setGenWarnings(prev => [
+          ...prev,
+          `${failed.length} of ${data.scenes.length} scenes failed to generate: ${failed
+            .map(s => `${s.title} (${s.error ?? "unknown error"})`)
+            .join("; ")}`,
+        ]);
+      }
       setAppState("loading");
     }
-  }, [jobProgress.data]);
+  }, [jobProgress.data, jobProgress.isSuccess, jobId, appState]);
 
   // Preload assets once in loading state
   const markVideoReady = useCallback((id: string) => {
@@ -239,7 +288,10 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
         el.preload = "auto";
         el.src = media.videoUrl;
         el.addEventListener("canplaythrough", () => markVideoReady(scene.id), { once: true });
-        el.addEventListener("error", () => markVideoReady(scene.id), { once: true });
+        el.addEventListener("error", () => {
+          console.error(`[DramaReel] Failed to preload video for scene ${scene.id}: ${media.videoUrl}`);
+          markVideoReady(scene.id);
+        }, { once: true });
         el.load();
       }
       if (media.audioUrl && !media.audioReady) {
@@ -247,7 +299,10 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
         el.preload = "auto";
         el.src = media.audioUrl;
         el.addEventListener("canplaythrough", () => markAudioReady(scene.id), { once: true });
-        el.addEventListener("error", () => markAudioReady(scene.id), { once: true });
+        el.addEventListener("error", () => {
+          console.error(`[DramaReel] Failed to preload audio for scene ${scene.id}: ${media.audioUrl}`);
+          markAudioReady(scene.id);
+        }, { once: true });
         el.load();
       }
     });
@@ -276,7 +331,7 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
     if (videoRef.current) {
       if (media?.videoUrl) {
         videoRef.current.src = media.videoUrl;
-        videoRef.current.play().catch(() => {});
+        playMedia(videoRef.current, `scene ${scene.id} video`);
       } else {
         videoRef.current.src = "";
       }
@@ -284,7 +339,7 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
 
     if (audioRef.current && media?.audioUrl) {
       audioRef.current.src = media.audioUrl;
-      audioRef.current.play().catch(() => {});
+      playMedia(audioRef.current, `scene ${scene.id} audio`);
       const onEnded = () => {
         if (currentScene < scenes.length - 1) setCurrentScene(c => c + 1);
         else setPlaying(false);
@@ -302,6 +357,8 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
   }, [playing, currentScene]);
 
   const handleGenerate = () => {
+    setGenError("");
+    setGenWarnings([]);
     setAppState("generating");
     setSceneGenStatus(Object.fromEntries(scenes.map(s => [s.id, "queued" as GenStatus])));
     startJob.mutate({
@@ -621,6 +678,26 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
               STEP 6 — DRAMA REEL
             </span>
           </div>
+
+          {genError && (
+            <div
+              role="alert"
+              className="mb-3 px-3 py-2 rounded text-xs"
+              style={{ background: "rgba(255,23,68,0.12)", border: "1px solid rgba(255,23,68,0.35)", color: "#FF6B6B", fontFamily: "Noto Sans, sans-serif" }}
+            >
+              ⚠ {genError}
+            </div>
+          )}
+
+          {genWarnings.map((w, i) => (
+            <div
+              key={i}
+              className="mb-2 px-3 py-2 rounded text-xs"
+              style={{ background: "rgba(255,215,0,0.1)", border: "1px solid rgba(255,215,0,0.3)", color: "rgba(255,215,0,0.85)", fontFamily: "Noto Sans, sans-serif" }}
+            >
+              ⚠ {w}
+            </div>
+          ))}
 
           {/* Scene strip */}
           <div className="flex gap-2 overflow-x-auto pb-1">
