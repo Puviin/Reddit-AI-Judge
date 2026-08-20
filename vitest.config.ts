@@ -14,6 +14,12 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["server/**/*.test.ts", "server/**/*.spec.ts"],
+    include: ["server/**/*.test.ts", "server/**/*.spec.ts", "shared/**/*.test.ts"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json-summary"],
+      include: ["server/**/*.ts", "shared/**/*.ts", "client/src/lib/**/*.ts"],
+      exclude: ["**/*.test.ts", "**/*.spec.ts", "**/*.d.ts"],
+    },
   },
 });
