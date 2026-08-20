@@ -2,18 +2,14 @@
 
 import { characterBible } from "@/lib/mockData";
 import type { Character } from "@/lib/mockData";
+import { roleColors } from "@/lib/roles";
 
 interface CharacterBibleProps {
   storyId: string;
   onContinue: () => void;
 }
 
-const ROLE_COLORS: Record<string, string> = {
-  Judge: "#FFD700",
-  Plaintiff: "#FF1744",
-  Defendant: "#4A90D9",
-  Witness: "#2ECC71",
-};
+const ROLE_COLORS = roleColors();
 
 export default function CharacterBible({ storyId, onContinue }: CharacterBibleProps) {
   const characters: Character[] = characterBible[storyId] || characterBible["story-001"];

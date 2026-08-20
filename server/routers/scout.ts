@@ -6,46 +6,23 @@
 import { publicProcedure, router } from "../_core/trpc";
 import { z } from "zod";
 import Exa from "exa-js";
+import { chatCompletion } from "../lib/openai";
 
 function getExa() {
   return new Exa(process.env.EXA_API_KEY!);
 }
 
+const SCOUT_SYSTEM_PROMPT =
+  "You are DramaForge Scout, an AI that turns Reddit drama into structured courtroom cases. Always respond with valid JSON only.";
+
 async function callOpenAI(prompt: string): Promise<string> {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error("OPENAI_API_KEY not set");
-
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are DramaForge Scout, an AI that turns Reddit drama into structured courtroom cases. Always respond with valid JSON only.",
-        },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.8,
-      max_tokens: 1500,
-      response_format: { type: "json_object" },
-    }),
+  return chatCompletion({
+    systemPrompt: SCOUT_SYSTEM_PROMPT,
+    userPrompt: prompt,
+    temperature: 0.8,
+    maxTokens: 1500,
+    json: true,
   });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`OpenAI error ${response.status}: ${err.slice(0, 200)}`);
-  }
-
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  return data?.choices?.[0]?.message?.content ?? "";
 }
 
 // ─── Strategy 1: Reddit JSON API ─────────────────────────────────────────────
