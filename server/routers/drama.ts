@@ -9,7 +9,9 @@ import { publicProcedure, router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import { getDb } from "../db";
 import { reelCache } from "../../drizzle/schema";
-import { fal } from "@fal-ai/client";
+import { chatCompletion } from "../lib/openai";
+import { generateFallbackImage, generateVideo } from "../lib/fal";
+import { generateVoice, voiceIdForRole } from "../lib/elevenlabs";
 
 // ─── Theme visual style map ───────────────────────────────────────────────────
 const THEME_STYLES: Record<string, {
@@ -116,109 +118,24 @@ PALETTE: ${theme.colorPalette}
 
 Write a vivid, highly coherent visual prompt that captures the intensity of this courtroom drama moment in 16:9 widescreen anime style. Return ONLY the final prompt text.`;
 
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (!openaiKey) {
-    // Fallback to simple prompt if no OpenAI key
-    return `${scene.narration}, ${theme.visualStyle}, ${theme.colorPalette}, cinematic 16:9, 5 seconds`;
-  }
+  const fallbackPrompt = `${scene.narration}, ${theme.visualStyle}, ${theme.colorPalette}, cinematic 16:9, 5 seconds`;
+  if (!process.env.OPENAI_API_KEY) return fallbackPrompt;
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${openaiKey}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
+  let text: string;
+  try {
+    text = await chatCompletion({
+      systemPrompt,
+      userPrompt,
       temperature: 0.9,
-      max_tokens: 600,
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    console.warn(`[Drama] OpenAI prompt generation failed: ${response.status} ${err.slice(0, 100)}`);
-    return `${scene.narration}, ${theme.visualStyle}, ${theme.colorPalette}, cinematic 16:9, 5 seconds`;
+      maxTokens: 600,
+    });
+  } catch (err) {
+    console.warn(`[Drama] OpenAI prompt generation failed:`, err);
+    return fallbackPrompt;
   }
 
-  const data = await response.json() as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const text = data?.choices?.[0]?.message?.content ?? "";
   return text.trim() || `${scene.narration}, ${theme.visualStyle}, 16:9, 5 seconds`;
 }
-
-// ─── LTX 2.3 Fast video generation via fal.ai SDK ───────────────────────────
-async function generateVideo(prompt: string, falApiKey: string): Promise<string> {
-  fal.config({ credentials: falApiKey });
-
-  const result = await fal.run("fal-ai/ltx-2.3/text-to-video/fast", {
-    input: {
-      prompt,
-      duration: "6",
-      resolution: "1080p",
-      aspect_ratio: "16:9",
-      fps: "24",
-      generate_audio: false,
-    },
-  }) as { video?: { url?: string } };
-
-  const videoUrl = result?.video?.url;
-  if (!videoUrl) throw new Error(`LTX 2.3 Fast returned no video URL: ${JSON.stringify(result)}`);
-  return videoUrl;
-}
-
-// ─── fal.ai image generation (fallback if Seedance fails) ────────────────────
-async function generateFallbackImage(prompt: string, falApiKey: string): Promise<string> {
-  fal.config({ credentials: falApiKey });
-  const result = await fal.run("fal-ai/flux/schnell", {
-    input: {
-      prompt: `${prompt}, high quality, cinematic, anime style`,
-      image_size: "landscape_16_9",
-      num_inference_steps: 4,
-      num_images: 1,
-    },
-  }) as { images?: Array<{ url?: string }> };
-  const imageUrl = result?.images?.[0]?.url;
-  if (!imageUrl) throw new Error(`fal.ai returned no image URL: ${JSON.stringify(result)}`);
-  return imageUrl;
-}
-
-// ─── ElevenLabs TTS ──────────────────────────────────────────────────────────
-async function generateVoice(text: string, elevenLabsKey: string, voiceId: string): Promise<Buffer> {
-  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-    method: "POST",
-    headers: {
-      "xi-api-key": elevenLabsKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      text,
-      model_id: "eleven_multilingual_v2",
-      voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`ElevenLabs error: ${response.status} ${err}`);
-  }
-
-  const buffer = await response.arrayBuffer();
-  return Buffer.from(buffer);
-}
-
-const VOICE_IDS: Record<string, string> = {
-  Judge:     "JBFqnCBsd6RMkjVDRZzb",
-  Plaintiff: "EXAVITQu4vr4xnSDxMaL",
-  Defendant: "TxGEqnHWrfWFTfGW9XjX",
-  Witness:   "ThT5KcBeYPX3keUQqHPh",
-  Narrator:  "pNInz6obpgDQGcFmaJgB",
-};
 
 // ─── Background job runner ────────────────────────────────────────────────────
 async function runReelJob(
@@ -264,8 +181,7 @@ async function runReelJob(
         })() : Promise.resolve(null),
 
         elevenKey ? (async () => {
-          const voiceId = VOICE_IDS[scene.speakerRole] || VOICE_IDS.Narrator;
-          const buf = await generateVoice(scene.narration, elevenKey, voiceId);
+          const buf = await generateVoice(scene.narration, elevenKey, voiceIdForRole(scene.speakerRole));
           const { url } = await storagePut(
             `drama-audio/${storyId}/${scene.id}.mp3`,
             buf,
@@ -347,6 +263,35 @@ async function runReelJob(
   setTimeout(() => jobs.delete(jobId), 10 * 60 * 1000);
 }
 
+type CachedReelScene = {
+  id: string;
+  title: string;
+  narration: string;
+  speakerRole: string;
+  videoUrl: string | null;
+  audioUrl: string | null;
+  mediaType?: "video" | "image";
+};
+
+type ReelCacheRow = typeof reelCache.$inferSelect;
+
+function toCachedReel(row: ReelCacheRow) {
+  return {
+    storyId: row.storyId,
+    storyTitle: row.storyTitle,
+    sceneCount: row.sceneCount,
+    scenes: row.scenes as CachedReelScene[],
+    createdAt: row.createdAt,
+  };
+}
+
+async function findReelCacheRow(storyId: string): Promise<ReelCacheRow | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(reelCache).where(eq(reelCache.storyId, storyId)).limit(1);
+  return rows[0] ?? null;
+}
+
 export const dramaRouter = router({
   // Check if a reel is already cached for this story + theme combo
   getReelCache: publicProcedure
@@ -356,39 +301,13 @@ export const dramaRouter = router({
     }))
     .query(async ({ input }) => {
       try {
-        const db = await getDb();
-        if (!db) return null;
         // Try theme-specific cache first, then fall back to storyId-only
+        // (storyId-only rows predate theme support)
         const cacheKey = input.themeId ? `${input.storyId}::${input.themeId}` : input.storyId;
-        const rows = await db.select().from(reelCache).where(eq(reelCache.storyId, cacheKey)).limit(1);
-        if (!rows.length && input.themeId) {
-          // Fall back to storyId-only cache (from before theme support)
-          const fallbackRows = await db.select().from(reelCache).where(eq(reelCache.storyId, input.storyId)).limit(1);
-          if (!fallbackRows.length) return null;
-          const row = fallbackRows[0];
-          return {
-            storyId: row.storyId,
-            storyTitle: row.storyTitle,
-            sceneCount: row.sceneCount,
-            scenes: row.scenes as Array<{
-              id: string; title: string; narration: string; speakerRole: string;
-              videoUrl: string | null; audioUrl: string | null; mediaType?: "video" | "image";
-            }>,
-            createdAt: row.createdAt,
-          };
-        }
-        if (!rows.length) return null;
-        const row = rows[0];
-        return {
-          storyId: row.storyId,
-          storyTitle: row.storyTitle,
-          sceneCount: row.sceneCount,
-          scenes: row.scenes as Array<{
-            id: string; title: string; narration: string; speakerRole: string;
-            videoUrl: string | null; audioUrl: string | null; mediaType?: "video" | "image";
-          }>,
-          createdAt: row.createdAt,
-        };
+        const row =
+          (await findReelCacheRow(cacheKey)) ??
+          (input.themeId ? await findReelCacheRow(input.storyId) : null);
+        return row ? toCachedReel(row) : null;
       } catch {
         return null;
       }

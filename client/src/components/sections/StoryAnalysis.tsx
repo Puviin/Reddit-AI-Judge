@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import type { Story } from "@/lib/mockData";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { trpc } from "@/lib/trpc";
+import { shortName } from "@/lib/roles";
 
 interface StoryAnalysisProps {
   story: Story;
@@ -65,9 +66,9 @@ export default function StoryAnalysis({ story, onContinue }: StoryAnalysisProps)
   const bothWrong = Math.max(0, 100 - plaintiffSentiment - defendantSentiment);
 
   const pieData = [
-    { name: `${story.plaintiff.split(" (")[0]} is Wrong`, value: Math.round(plaintiffSentiment), color: "#FF1744" },
+    { name: `${shortName(story.plaintiff)} is Wrong`, value: Math.round(plaintiffSentiment), color: "#FF1744" },
     { name: "Both Wrong", value: Math.round(bothWrong), color: "#FFD700" },
-    { name: `${story.defendant.split(" (")[0]} is Right`, value: Math.round(defendantSentiment), color: "#4A90D9" },
+    { name: `${shortName(story.defendant)} is Right`, value: Math.round(defendantSentiment), color: "#4A90D9" },
   ];
 
   return (

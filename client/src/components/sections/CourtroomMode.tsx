@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { courtroomDialogue, characterBible, stories } from "@/lib/mockData";
 import { trpc } from "@/lib/trpc";
+import { roleColors } from "@/lib/roles";
 
 interface CourtroomModeProps {
   storyId: string;
@@ -13,13 +14,7 @@ interface CourtroomModeProps {
   } | null;
 }
 
-const ROLE_COLORS: Record<string, string> = {
-  Plaintiff: "#FF1744",
-  Defendant: "#4A90D9",
-  Judge: "#FFD700",
-  Witness: "#2ECC71",
-  Narrator: "#FF6B35",
-};
+const ROLE_COLORS = roleColors({ Narrator: "#FF6B35" });
 
 const ROLE_ICONS: Record<string, string> = {
   Plaintiff: "⚔️",

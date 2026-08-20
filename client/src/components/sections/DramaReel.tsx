@@ -2,9 +2,11 @@
 // Full-screen manga motion comic video player
 // Per-scene progress bar with job polling
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import type { Story } from "@/lib/mockData";
+import { roleColors, shortName } from "@/lib/roles";
+import { useSceneMedia } from "@/hooks/useSceneMedia";
 
 interface DramaReelProps {
   story: Story;
@@ -45,18 +47,18 @@ function buildScenes(story: Story): ReelScene[] {
     {
       id: "plaintiff",
       title: "THE COMPLAINT",
-      narration: `${story.plaintiff.split(" (")[0]} says: "${story.keyEvidence[0]}"`,
+      narration: `${shortName(story.plaintiff)} says: "${story.keyEvidence[0]}"`,
       speakerRole: "Plaintiff",
-      speaker: story.plaintiff.split(" (")[0],
+      speaker: shortName(story.plaintiff),
       prompt: `Passionate young woman in red blazer pointing dramatically at camera, speed lines behind her, red and gold color scheme, intense righteous expression, close-up shot`,
       accentColor: "#FF1744",
     },
     {
       id: "defendant",
       title: "THE DEFENSE",
-      narration: `${story.defendant.split(" (")[0]} responds: "${story.keyEvidence[story.keyEvidence.length - 1]}"`,
+      narration: `${shortName(story.defendant)} responds: "${story.keyEvidence[story.keyEvidence.length - 1]}"`,
       speakerRole: "Defendant",
-      speaker: story.defendant.split(" (")[0],
+      speaker: shortName(story.defendant),
       prompt: `Nervous young man with hands raised defensively, blue dramatic lighting, sweat drops, manga impact lines, desperate wide-eyed expression, dark navy background`,
       accentColor: "#4A90D9",
     },
@@ -81,30 +83,11 @@ function buildScenes(story: Story): ReelScene[] {
   ];
 }
 
-type SceneMedia = {
-  videoUrl: string | null;
-  audioUrl: string | null;
-  mediaType?: "video" | "image";
-  videoReady: boolean;
-  audioReady: boolean;
-};
-
 type GenStatus = "queued" | "generating" | "done" | "error";
 
 type AppState = "idle" | "generating" | "loading" | "ready";
 
-const ROLE_COLORS: Record<string, string> = {
-  Narrator: "#FFD700",
-  Plaintiff: "#FF1744",
-  Defendant: "#4A90D9",
-  Witness: "#2ECC71",
-  Judge: "#FFD700",
-};
-
-// No longer needed — mediaType comes from API
-// function isImageUrl(url: string): boolean {
-//   return /\.(jpe?g|png|webp|gif|avif)(?:[?#].*)?$/i.test(url);
-// }
+const ROLE_COLORS = roleColors();
 
 const STATUS_ICONS: Record<GenStatus, string> = {
   queued: "○",
@@ -118,13 +101,17 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
   const [appState, setAppState] = useState<AppState>("idle");
   const [jobId, setJobId] = useState<string | null>(null);
   const [sceneGenStatus, setSceneGenStatus] = useState<Record<string, GenStatus>>({});
-  const [sceneMedia, setSceneMedia] = useState<Record<string, SceneMedia>>({});
   const [currentScene, setCurrentScene] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [loadProgress, setLoadProgress] = useState(0);
   const [genPercent, setGenPercent] = useState(0);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [cacheLoaded, setCacheLoaded] = useState(false);
+
+  const sceneIds = useMemo(() => scenes.map(s => s.id), [scenes]);
+  const { sceneMedia, setMedia, loadProgress } = useSceneMedia({
+    sceneIds,
+    preloading: appState === "loading",
+  });
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -143,25 +130,13 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
     const cached = reelCache.data;
     if (cached.scenes && cached.scenes.length > 0) {
       // Load cached media into state and jump straight to loading phase
-      const mediaMap: Record<string, SceneMedia> = {};
-      cached.scenes.forEach(s => {
-        mediaMap[s.id] = {
-          videoUrl: s.videoUrl,
-          audioUrl: s.audioUrl,
-          mediaType: s.mediaType,
-          videoReady: !s.videoUrl,
-          audioReady: !s.audioUrl,
-        };
-      });
-      setSceneMedia(mediaMap);
+      setMedia(cached.scenes);
       setSceneGenStatus(Object.fromEntries(cached.scenes.map(s => [s.id, "done" as GenStatus])));
       setGenPercent(100);
       setAppState("loading");
-      setCacheLoaded(true);
-    } else {
-      setCacheLoaded(true);
     }
-  }, [reelCache.data, cacheLoaded]);
+    setCacheLoaded(true);
+  }, [reelCache.data, cacheLoaded, setMedia]);
 
   // Start job mutation
   const startJob = trpc.drama.startReelJob.useMutation({
@@ -199,71 +174,18 @@ export default function DramaReel({ story, theme, onContinue }: DramaReelProps) 
     setGenPercent(data.percent);
 
     // As scenes complete, add their media
-    data.scenes.forEach(s => {
-      if (s.status === "done" && (s.videoUrl || s.audioUrl)) {
-        setSceneMedia(prev => ({
-          ...prev,
-          [s.id]: {
-            videoUrl: s.videoUrl,
-            audioUrl: s.audioUrl,
-            mediaType: s.mediaType,
-            videoReady: !s.videoUrl,
-            audioReady: !s.audioUrl,
-          },
-        }));
-      }
-    });
+    setMedia(data.scenes.filter(s => s.status === "done" && (s.videoUrl || s.audioUrl)));
 
     // Job complete — move to loading phase
     if (data.status === "done") {
       if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
       setAppState("loading");
     }
-  }, [jobProgress.data]);
-
-  // Preload assets once in loading state
-  const markVideoReady = useCallback((id: string) => {
-    setSceneMedia(prev => ({ ...prev, [id]: { ...prev[id], videoReady: true } }));
-  }, []);
-  const markAudioReady = useCallback((id: string) => {
-    setSceneMedia(prev => ({ ...prev, [id]: { ...prev[id], audioReady: true } }));
-  }, []);
+  }, [jobProgress.data, setMedia]);
 
   useEffect(() => {
-    if (appState !== "loading") return;
-    scenes.forEach(scene => {
-      const media = sceneMedia[scene.id];
-      if (!media) return;
-      if (media.videoUrl && !media.videoReady) {
-        const el = document.createElement("video");
-        el.preload = "auto";
-        el.src = media.videoUrl;
-        el.addEventListener("canplaythrough", () => markVideoReady(scene.id), { once: true });
-        el.addEventListener("error", () => markVideoReady(scene.id), { once: true });
-        el.load();
-      }
-      if (media.audioUrl && !media.audioReady) {
-        const el = document.createElement("audio");
-        el.preload = "auto";
-        el.src = media.audioUrl;
-        el.addEventListener("canplaythrough", () => markAudioReady(scene.id), { once: true });
-        el.addEventListener("error", () => markAudioReady(scene.id), { once: true });
-        el.load();
-      }
-    });
-  }, [appState, sceneMedia]);
-
-  // Track asset load progress
-  useEffect(() => {
-    if (appState !== "loading") return;
-    const total = scenes.length * 2;
-    const ready = Object.values(sceneMedia).reduce(
-      (acc, m) => acc + (m.videoReady ? 1 : 0) + (m.audioReady ? 1 : 0), 0
-    );
-    const pct = Math.round((ready / total) * 100);
-    setLoadProgress(pct);
-    if (pct >= 100) setAppState("ready");
-  }, [sceneMedia, appState]);
+    if (appState === "loading" && loadProgress >= 100) setAppState("ready");
+  }, [appState, loadProgress]);
 
   // Scene playback
   useEffect(() => {

@@ -4,42 +4,7 @@
 
 import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
-
-// ─── OpenAI helper ───────────────────────────────────────────────────────────
-async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<string> {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error("OPENAI_API_KEY not set");
-
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.85,
-      max_tokens: 2000,
-      response_format: { type: "json_object" },
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`OpenAI error ${response.status}: ${err.slice(0, 200)}`);
-  }
-
-  const data = await response.json() as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const text = data?.choices?.[0]?.message?.content ?? "";
-  if (!text) throw new Error("OpenAI returned empty response");
-  return text;
-}
+import { chatCompletion, parseJsonResponse } from "../lib/openai";
 
 // ─── Gemini fallback ─────────────────────────────────────────────────────────
 async function callGemini(prompt: string): Promise<string> {
@@ -71,12 +36,15 @@ async function callGemini(prompt: string): Promise<string> {
 
 // ─── Unified AI call — OpenAI only (Gemini quota exhausted) ────────────────────
 async function callAI(systemPrompt: string, userPrompt: string): Promise<string> {
-  return await callOpenAI(systemPrompt, userPrompt);
-}
-
-function parseJSON<T>(raw: string): T {
-  const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-  return JSON.parse(cleaned) as T;
+  const text = await chatCompletion({
+    systemPrompt,
+    userPrompt,
+    temperature: 0.85,
+    maxTokens: 2000,
+    json: true,
+  });
+  if (!text) throw new Error("OpenAI returned empty response");
+  return text;
 }
 
 // ─── Router ──────────────────────────────────────────────────────────────────
@@ -112,7 +80,7 @@ Return JSON with this exact structure:
 }`;
 
       const raw = await callAI(systemPrompt, userPrompt);
-      return parseJSON<{
+      return parseJsonResponse<{
         dramaScore: number;
         safetyRating: string;
         sentiment: { plaintiff: number; defendant: number; publicOpinion: number };
@@ -191,7 +159,7 @@ Return JSON:
 }`;
 
       const raw = await callAI(systemPrompt, userPrompt);
-      return parseJSON<{
+      return parseJsonResponse<{
         characters: Array<{
           id: string;
           name: string;
@@ -241,7 +209,7 @@ Return JSON:
 }`;
 
       const raw = await callAI(systemPrompt, userPrompt);
-      return parseJSON<{
+      return parseJsonResponse<{
         exchanges: Array<{
           id: number;
           speaker: string;
@@ -285,7 +253,7 @@ Return JSON:
 }`;
 
       const raw = await callAI(systemPrompt, userPrompt);
-      return parseJSON<{
+      return parseJsonResponse<{
         verdict: string;
         verdictFull: string;
         ruling: string;

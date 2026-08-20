@@ -2,22 +2,18 @@
 // Full-screen video player with load-gating
 // Video is FRONT AND CENTER — no character images blocking it
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { clipScenes } from "@/lib/mockData";
+import { roleColors } from "@/lib/roles";
+import { useSceneMedia } from "@/hooks/useSceneMedia";
 
 interface ClipPlayerProps {
   storyId: string;
   onFinish: () => void;
 }
 
-const ROLE_COLORS: Record<string, string> = {
-  Plaintiff: "#FF1744",
-  Defendant: "#4A90D9",
-  Judge: "#FFD700",
-  Witness: "#2ECC71",
-  Narrator: "rgba(255,255,255,0.7)",
-};
+const ROLE_COLORS = roleColors({ Narrator: "rgba(255,255,255,0.7)" });
 
 // Manga-style video prompts per role
 const ROLE_PROMPTS: Record<string, string> = {
@@ -28,14 +24,6 @@ const ROLE_PROMPTS: Record<string, string> = {
   Narrator: "Anime manga style, dramatic courtroom establishing shot, golden light rays, dark atmosphere, speed lines, cinematic wide angle composition",
 };
 
-type SceneMedia = {
-  videoUrl: string | null;
-  audioUrl: string | null;
-  mediaType?: "video" | "image";
-  videoReady: boolean;
-  audioReady: boolean;
-};
-
 type LoadState = "idle" | "generating" | "loading" | "ready";
 
 export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
@@ -43,9 +31,13 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
   const [currentScene, setCurrentScene] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [finished, setFinished] = useState(false);
-  const [sceneMedia, setSceneMedia] = useState<Record<string, SceneMedia>>({});
   const [loadState, setLoadState] = useState<LoadState>("idle");
-  const [loadProgress, setLoadProgress] = useState(0);
+
+  const sceneIds = useMemo(() => scenes.map(s => `clip-${s.id}`), [scenes]);
+  const { sceneMedia, setMedia, loadProgress } = useSceneMedia({
+    sceneIds,
+    preloading: loadState === "loading",
+  });
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -76,71 +68,18 @@ export default function ClipPlayer({ storyId, onFinish }: ClipPlayerProps) {
     if (!data) return;
     setGenPercent(data.percent);
 
-    data.scenes.forEach(s => {
-      if (s.status === "done" && (s.videoUrl || s.audioUrl)) {
-        setSceneMedia(prev => ({
-          ...prev,
-          [s.id]: {
-            videoUrl: s.videoUrl,
-            audioUrl: s.audioUrl,
-            mediaType: s.mediaType,
-            videoReady: !s.videoUrl,
-            audioReady: !s.audioUrl,
-          },
-        }));
-      }
-    });
+    setMedia(
+      data.scenes.filter(s => s.status === "done" && (s.videoUrl || s.audioUrl))
+    );
 
     if (data.status === "done") {
       setLoadState("loading");
     }
-  }, [jobProgress.data]);
+  }, [jobProgress.data, setMedia]);
 
-  const markVideoReady = useCallback((id: string) => {
-    setSceneMedia((prev) => ({ ...prev, [id]: { ...prev[id], videoReady: true } }));
-  }, []);
-
-  const markAudioReady = useCallback((id: string) => {
-    setSceneMedia((prev) => ({ ...prev, [id]: { ...prev[id], audioReady: true } }));
-  }, []);
-
-  // Track overall load progress
   useEffect(() => {
-    if (loadState !== "loading") return;
-    const total = scenes.length * 2;
-    const ready = Object.values(sceneMedia).reduce(
-      (acc, m) => acc + (m.videoReady ? 1 : 0) + (m.audioReady ? 1 : 0), 0
-    );
-    const pct = Math.round((ready / total) * 100);
-    setLoadProgress(pct);
-    if (pct >= 100) setLoadState("ready");
-  }, [sceneMedia, loadState, scenes.length]);
-
-  // Preload all assets
-  useEffect(() => {
-    if (loadState !== "loading") return;
-    scenes.forEach((scene) => {
-      const key = `clip-${scene.id}`;
-      const media = sceneMedia[key];
-      if (!media) return;
-      if (media.videoUrl && !media.videoReady) {
-        const vid = document.createElement("video");
-        vid.preload = "auto";
-        vid.src = media.videoUrl;
-        vid.addEventListener("canplaythrough", () => markVideoReady(key), { once: true });
-        vid.addEventListener("error", () => markVideoReady(key), { once: true });
-        vid.load();
-      }
-      if (media.audioUrl && !media.audioReady) {
-        const aud = document.createElement("audio");
-        aud.preload = "auto";
-        aud.src = media.audioUrl;
-        aud.addEventListener("canplaythrough", () => markAudioReady(key), { once: true });
-        aud.addEventListener("error", () => markAudioReady(key), { once: true });
-        aud.load();
-      }
-    });
-  }, [loadState, sceneMedia]);
+    if (loadState === "loading" && loadProgress >= 100) setLoadState("ready");
+  }, [loadState, loadProgress]);
 
   // Scene playback
   useEffect(() => {

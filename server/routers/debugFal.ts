@@ -1,5 +1,24 @@
 // Temporary debug router to test fal.ai API from server-side
 import { publicProcedure, router } from "../_core/trpc";
+import { requestSpeech, VOICE_IDS } from "../lib/elevenlabs";
+
+const FAL_PROBES = [
+  {
+    name: "minimax",
+    path: "fal-ai/minimax-video/text-to-video",
+    body: { prompt: "anime courtroom scene", duration: 6 },
+  },
+  {
+    name: "animatediff",
+    path: "fal-ai/fast-animatediff/text-to-video",
+    body: { prompt: "anime courtroom scene, manga style" },
+  },
+  {
+    name: "flux",
+    path: "fal-ai/flux/schnell",
+    body: { prompt: "anime courtroom scene, manga style, dramatic lighting" },
+  },
+];
 
 export const debugFalRouter = router({
   testFal: publicProcedure.mutation(async () => {
@@ -16,53 +35,23 @@ export const debugFalRouter = router({
       return { ...results, error: "FAL_API_KEY not set in environment" };
     }
 
-    // Test 1: minimax-video
-    try {
-      const r = await fetch("https://fal.run/fal-ai/minimax-video/text-to-video", {
-        method: "POST",
-        headers: { "Authorization": `Key ${falKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: "anime courtroom scene", duration: 6 }),
-      });
-      results.minimax_status = r.status;
-      results.minimax_body = (await r.text()).substring(0, 300);
-    } catch (e: unknown) {
-      results.minimax_error = e instanceof Error ? e.message : String(e);
+    for (const probe of FAL_PROBES) {
+      try {
+        const r = await fetch(`https://fal.run/${probe.path}`, {
+          method: "POST",
+          headers: { Authorization: `Key ${falKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify(probe.body),
+        });
+        results[`${probe.name}_status`] = r.status;
+        results[`${probe.name}_body`] = (await r.text()).substring(0, 300);
+      } catch (e: unknown) {
+        results[`${probe.name}_error`] = e instanceof Error ? e.message : String(e);
+      }
     }
 
-    // Test 2: fast-animatediff
-    try {
-      const r = await fetch("https://fal.run/fal-ai/fast-animatediff/text-to-video", {
-        method: "POST",
-        headers: { "Authorization": `Key ${falKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: "anime courtroom scene, manga style" }),
-      });
-      results.animatediff_status = r.status;
-      results.animatediff_body = (await r.text()).substring(0, 300);
-    } catch (e: unknown) {
-      results.animatediff_error = e instanceof Error ? e.message : String(e);
-    }
-
-    // Test 3: flux/schnell image
-    try {
-      const r = await fetch("https://fal.run/fal-ai/flux/schnell", {
-        method: "POST",
-        headers: { "Authorization": `Key ${falKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: "anime courtroom scene, manga style, dramatic lighting" }),
-      });
-      results.flux_status = r.status;
-      results.flux_body = (await r.text()).substring(0, 300);
-    } catch (e: unknown) {
-      results.flux_error = e instanceof Error ? e.message : String(e);
-    }
-
-    // Test 4: ElevenLabs
     if (elevenKey) {
       try {
-        const r = await fetch("https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb", {
-          method: "POST",
-          headers: { "xi-api-key": elevenKey, "Content-Type": "application/json" },
-          body: JSON.stringify({ text: "Court is now in session.", model_id: "eleven_multilingual_v2", voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
-        });
+        const r = await requestSpeech("Court is now in session.", elevenKey, VOICE_IDS.Judge);
         results.elevenlabs_status = r.status;
         if (!r.ok) results.elevenlabs_error = await r.text();
         else results.elevenlabs_ok = true;

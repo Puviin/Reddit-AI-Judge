@@ -4,6 +4,7 @@
 import { useState } from "react";
 import type { Story } from "@/lib/mockData";
 import { trpc } from "@/lib/trpc";
+import { shortName } from "@/lib/roles";
 
 interface StorySelectionProps {
   stories: Story[];
@@ -115,12 +116,12 @@ export default function StorySelection({ stories, onSelect }: StorySelectionProp
               <div className="px-4 pb-4 flex items-center gap-2">
                 <div className="flex-1 p-2 rounded text-center text-xs" style={{ background: "rgba(255,23,68,0.1)", border: "1px solid rgba(255,23,68,0.2)" }}>
                   <div className="text-[10px] uppercase" style={{ color: "#FF1744", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>Plaintiff</div>
-                  <div className="truncate" style={{ color: "rgba(255,255,255,0.7)", fontFamily: "Noto Sans, sans-serif" }}>{story.plaintiff.split(" (")[0]}</div>
+                  <div className="truncate" style={{ color: "rgba(255,255,255,0.7)", fontFamily: "Noto Sans, sans-serif" }}>{shortName(story.plaintiff)}</div>
                 </div>
                 <div style={{ fontFamily: "'Bebas Neue', Impact, sans-serif", color: "#FFD700", fontSize: "1.2rem" }}>VS</div>
                 <div className="flex-1 p-2 rounded text-center text-xs" style={{ background: "rgba(74,144,217,0.1)", border: "1px solid rgba(74,144,217,0.2)" }}>
                   <div className="text-[10px] uppercase" style={{ color: "#4A90D9", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>Defendant</div>
-                  <div className="truncate" style={{ color: "rgba(255,255,255,0.7)", fontFamily: "Noto Sans, sans-serif" }}>{story.defendant.split(" (")[0]}</div>
+                  <div className="truncate" style={{ color: "rgba(255,255,255,0.7)", fontFamily: "Noto Sans, sans-serif" }}>{shortName(story.defendant)}</div>
                 </div>
               </div>
 
